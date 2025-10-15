@@ -1,6 +1,7 @@
 use {
   ego_tree::NodeRef,
-  scraper::{ElementRef, Node},
+  scraper::{ElementRef, Html, Node},
+  std::ops::Deref,
 };
 
 fn is_whitespace_text(node: &NodeRef<Node>) -> bool {
@@ -11,80 +12,145 @@ fn normalize_whitespace(text: &str) -> String {
   text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn compare_elements(elem1: &ElementRef, elem2: &ElementRef) {
-  assert_eq!(
-    elem1.value().name(),
-    elem2.value().name(),
-    "Tag name mismatch"
-  );
+fn escape_text(input: &str) -> String {
+  let mut escaped = String::with_capacity(input.len());
 
-  let mut attrs1 = elem1.value().attrs().collect::<Vec<_>>();
-  let mut attrs2 = elem2.value().attrs().collect::<Vec<_>>();
-
-  attrs1.sort_by_key(|a| a.0);
-  attrs2.sort_by_key(|a| a.0);
-
-  assert_eq!(
-    attrs1,
-    attrs2,
-    "Attributes mismatch on <{}>",
-    elem1.value().name()
-  );
-
-  let children1 = elem1
-    .children()
-    .filter(|n| !is_whitespace_text(n))
-    .collect::<Vec<_>>();
-
-  let children2 = elem2
-    .children()
-    .filter(|n| !is_whitespace_text(n))
-    .collect::<Vec<_>>();
-
-  assert_eq!(
-    children1.len(),
-    children2.len(),
-    "Different number of children in <{}>",
-    elem1.value().name()
-  );
-
-  for (child1, child2) in children1.iter().zip(children2.iter()) {
-    match (child1.value(), child2.value()) {
-      (Node::Element(_), Node::Element(_)) => {
-        compare_elements(
-          &ElementRef::wrap(*child1).unwrap(),
-          &ElementRef::wrap(*child2).unwrap(),
-        );
-      }
-      (Node::Text(t1), Node::Text(t2)) => {
-        assert_eq!(
-          normalize_whitespace(t1),
-          normalize_whitespace(t2),
-          "Text content mismatch in <{}>",
-          elem1.value().name()
-        );
-      }
-      _ => {
-        panic!(
-          "Node type mismatch in <{}>: {:?} vs {:?}",
-          elem1.value().name(),
-          child1.value(),
-          child2.value()
-        );
-      }
+  for ch in input.chars() {
+    match ch {
+      '&' => escaped.push_str("&amp;"),
+      '<' => escaped.push_str("&lt;"),
+      '>' => escaped.push_str("&gt;"),
+      _ => escaped.push(ch),
     }
   }
+
+  escaped
+}
+
+fn escape_attr_value(input: &str) -> String {
+  let mut escaped = String::with_capacity(input.len());
+
+  for ch in input.chars() {
+    match ch {
+      '&' => escaped.push_str("&amp;"),
+      '<' => escaped.push_str("&lt;"),
+      '"' => escaped.push_str("&quot;"),
+      _ => escaped.push(ch),
+    }
+  }
+
+  escaped
+}
+
+fn significant_children<'a>(
+  element: &ElementRef<'a>,
+) -> Vec<NodeRef<'a, Node>> {
+  element
+    .children()
+    .filter(|child| !is_whitespace_text(child))
+    .collect::<Vec<_>>()
+}
+
+fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
+  let indent = "  ".repeat(depth);
+  let name = element.value().name();
+
+  buffer.push_str(&indent);
+  buffer.push('<');
+  buffer.push_str(name);
+
+  let mut attrs = element.value().attrs().collect::<Vec<_>>();
+  attrs.sort_by_key(|attr| attr.0);
+
+  for (key, value) in attrs {
+    buffer.push(' ');
+    buffer.push_str(key);
+    buffer.push_str("=\"");
+    buffer.push_str(&escape_attr_value(value));
+    buffer.push('"');
+  }
+
+  let children = significant_children(element);
+
+  if children.is_empty() {
+    buffer.push_str("></");
+    buffer.push_str(name);
+    buffer.push('>');
+    buffer.push('\n');
+    return;
+  }
+
+  buffer.push('>');
+
+  let child_indent = "  ".repeat(depth + 1);
+
+  for child in children {
+    match child.value() {
+      Node::Element(_) => {
+        buffer.push('\n');
+        write_element(
+          buffer,
+          &ElementRef::wrap(child).expect("child must be an element"),
+          depth + 1,
+        );
+      }
+      Node::Text(text) => {
+        let normalized = normalize_whitespace(text.deref());
+        if !normalized.is_empty() {
+          buffer.push('\n');
+          buffer.push_str(&child_indent);
+          buffer.push_str(&escape_text(&normalized));
+        }
+      }
+      Node::Comment(comment) => {
+        buffer.push('\n');
+        buffer.push_str(&child_indent);
+        buffer.push_str("<!-- ");
+        buffer.push_str(comment.deref().trim());
+        buffer.push_str(" -->");
+      }
+      Node::Doctype(doctype) => {
+        buffer.push('\n');
+        buffer.push_str(&child_indent);
+        buffer.push_str(&format!("{doctype:?}"));
+      }
+      Node::ProcessingInstruction(pi) => {
+        buffer.push('\n');
+        buffer.push_str(&child_indent);
+        buffer.push_str(&format!("{pi:?}"));
+      }
+      Node::Document | Node::Fragment => {}
+    }
+  }
+
+  buffer.push('\n');
+  buffer.push_str(&indent);
+  buffer.push_str("</");
+  buffer.push_str(name);
+  buffer.push('>');
+  buffer.push('\n');
+}
+
+fn normalize_html(html: &Html) -> String {
+  let mut buffer = String::new();
+  write_element(&mut buffer, &html.root_element(), 0);
+  buffer.trim_end().to_string()
 }
 
 #[doc(hidden)]
 pub mod __private {
-  use super::compare_elements;
-  use scraper::Html;
-  use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+  use {
+    super::normalize_html,
+    scraper::Html,
+    std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+  };
 
   pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
+    let (actual_normalized, expected_normalized) =
+      (normalize_html(&actual), normalize_html(&expected));
+
     let result = catch_unwind(AssertUnwindSafe(|| {
-      compare_elements(&actual.root_element(), &expected.root_element());
+      pretty_assertions::assert_eq!(expected_normalized, actual_normalized);
     }));
 
     match result {
@@ -189,7 +255,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic(expected = "Tag name mismatch")]
+  #[should_panic]
   fn mismatch_panics() {
     crate::assert_html_eq!("<div></div>", "<span></span>");
   }

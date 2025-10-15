@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 ego-tree = "0.10.0"
 scraper = "0.24.0"
+pretty_assertions = "1.4.1"
