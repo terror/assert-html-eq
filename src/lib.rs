@@ -1,15 +1,44 @@
 use {
   ego_tree::NodeRef,
   scraper::{ElementRef, Html, Node},
-  std::ops::Deref,
+  std::{borrow::Cow, ops::Deref},
 };
 
-fn is_whitespace_text(node: &NodeRef<Node>) -> bool {
-  matches!(node.value(), Node::Text(t) if t.trim().is_empty())
+fn is_whitespace_significant(tag: &str) -> bool {
+  matches!(tag, "code" | "pre" | "script" | "style" | "textarea")
 }
 
-fn normalize_whitespace(text: &str) -> String {
-  text.split_whitespace().collect::<Vec<_>>().join(" ")
+fn normalize_nbsp(text: &str) -> Cow<'_, str> {
+  if text.contains('\u{00A0}') {
+    let mut out = String::with_capacity(text.len());
+
+    for ch in text.chars() {
+      out.push(if ch == '\u{00A0}' { ' ' } else { ch });
+    }
+
+    Cow::Owned(out)
+  } else {
+    Cow::Borrowed(text)
+  }
+}
+
+fn normalize_text_for<'a>(stack: &[&'a str], text: &str) -> String {
+  if stack.iter().any(|tag| is_whitespace_significant(tag)) {
+    text.to_string()
+  } else {
+    normalize_nbsp(text)
+      .split_whitespace()
+      .collect::<Vec<_>>()
+      .join(" ")
+  }
+}
+
+fn should_keep_text<'a>(stack: &[&'a str], text: &str) -> bool {
+  if text.trim().is_empty() {
+    stack.iter().any(|tag| is_whitespace_significant(tag))
+  } else {
+    true
+  }
 }
 
 fn escape_text(input: &str) -> String {
@@ -42,16 +71,78 @@ fn escape_attr_value(input: &str) -> String {
   escaped
 }
 
-fn significant_children<'a>(
-  element: &ElementRef<'a>,
-) -> Vec<NodeRef<'a, Node>> {
-  element
-    .children()
-    .filter(|child| !is_whitespace_text(child))
-    .collect::<Vec<_>>()
+fn is_boolean_attribute(name: &str) -> bool {
+  matches!(
+    name,
+    "allowfullscreen"
+      | "async"
+      | "autofocus"
+      | "autoplay"
+      | "checked"
+      | "controls"
+      | "default"
+      | "defer"
+      | "disabled"
+      | "formnovalidate"
+      | "hidden"
+      | "inert"
+      | "ismap"
+      | "itemscope"
+      | "loop"
+      | "multiple"
+      | "muted"
+      | "nomodule"
+      | "novalidate"
+      | "open"
+      | "playsinline"
+      | "readonly"
+      | "required"
+      | "reversed"
+      | "selected"
+      | "truespeed"
+  )
 }
 
-fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
+struct Attr<'a> {
+  name: &'a str,
+  value: Option<Cow<'a, str>>,
+}
+
+fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attr<'a>> {
+  let mut attrs = element
+    .value()
+    .attrs()
+    .map(|(name, value)| {
+      if name == "class" {
+        let mut tokens = value.split_ascii_whitespace().collect::<Vec<_>>();
+        tokens.sort_unstable();
+        tokens.dedup();
+
+        Attr {
+          name,
+          value: Some(Cow::Owned(tokens.join(" "))),
+        }
+      } else if is_boolean_attribute(name) {
+        Attr { name, value: None }
+      } else {
+        Attr {
+          name,
+          value: Some(Cow::Borrowed(value)),
+        }
+      }
+    })
+    .collect::<Vec<_>>();
+
+  attrs.sort_by(|a, b| a.name.cmp(b.name));
+  attrs
+}
+
+fn write_element<'a>(
+  buffer: &mut String,
+  element: &ElementRef<'a>,
+  depth: usize,
+  stack: &mut Vec<&'a str>,
+) {
   let indent = "  ".repeat(depth);
   let name = element.value().name();
 
@@ -59,24 +150,36 @@ fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
   buffer.push('<');
   buffer.push_str(name);
 
-  let mut attrs = element.value().attrs().collect::<Vec<_>>();
-  attrs.sort_by_key(|attr| attr.0);
+  let attrs = normalize_attributes(element);
 
-  for (key, value) in attrs {
+  for Attr { name: key, value } in attrs {
     buffer.push(' ');
     buffer.push_str(key);
-    buffer.push_str("=\"");
-    buffer.push_str(&escape_attr_value(value));
-    buffer.push('"');
+    if let Some(value) = value {
+      buffer.push_str("=\"");
+      buffer.push_str(&escape_attr_value(value.as_ref()));
+      buffer.push('"');
+    }
   }
 
-  let children = significant_children(element);
+  stack.push(name);
+
+  let children: Vec<NodeRef<'a, Node>> = element
+    .children()
+    .filter(|child| match child.value() {
+      Node::Comment(_) => false,
+      Node::Text(text) => should_keep_text(stack, text.deref()),
+      Node::Document | Node::Fragment => false,
+      _ => true,
+    })
+    .collect();
 
   if children.is_empty() {
     buffer.push_str("></");
     buffer.push_str(name);
     buffer.push('>');
     buffer.push('\n');
+    stack.pop();
     return;
   }
 
@@ -92,22 +195,16 @@ fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
           buffer,
           &ElementRef::wrap(child).expect("child must be an element"),
           depth + 1,
+          stack,
         );
       }
       Node::Text(text) => {
-        let normalized = normalize_whitespace(text.deref());
+        let normalized = normalize_text_for(stack, text.deref());
         if !normalized.is_empty() {
           buffer.push('\n');
           buffer.push_str(&child_indent);
           buffer.push_str(&escape_text(&normalized));
         }
-      }
-      Node::Comment(comment) => {
-        buffer.push('\n');
-        buffer.push_str(&child_indent);
-        buffer.push_str("<!-- ");
-        buffer.push_str(comment.deref().trim());
-        buffer.push_str(" -->");
       }
       Node::Doctype(doctype) => {
         buffer.push('\n');
@@ -120,6 +217,7 @@ fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
         buffer.push_str(&format!("{pi:?}"));
       }
       Node::Document | Node::Fragment => {}
+      Node::Comment(_) => {}
     }
   }
 
@@ -129,11 +227,14 @@ fn write_element(buffer: &mut String, element: &ElementRef, depth: usize) {
   buffer.push_str(name);
   buffer.push('>');
   buffer.push('\n');
+
+  stack.pop();
 }
 
 fn normalize_html(html: &Html) -> String {
   let mut buffer = String::new();
-  write_element(&mut buffer, &html.root_element(), 0);
+  let mut stack = Vec::new();
+  write_element(&mut buffer, &html.root_element(), 0, &mut stack);
   buffer.trim_end().to_string()
 }
 
@@ -258,5 +359,52 @@ mod tests {
   #[should_panic]
   fn mismatch_panics() {
     crate::assert_html_eq!("<div></div>", "<span></span>");
+  }
+
+  #[test]
+  fn ignores_comments() {
+    crate::assert_html_eq!(
+      "<div><!-- noisy --><span>Text</span></div>",
+      "<div><span>Text</span></div>"
+    );
+  }
+
+  #[test]
+  fn normalizes_class_token_order() {
+    crate::assert_html_eq!(
+      "<div class=\"b a c b\"></div>",
+      "<div class=\"a b c\"></div>"
+    );
+  }
+
+  #[test]
+  fn normalizes_boolean_attributes() {
+    crate::assert_html_eq!(
+      "<input type=\"checkbox\" disabled=\"disabled\" checked=\"\" />",
+      "<input type=\"checkbox\" disabled checked>"
+    );
+  }
+
+  #[test]
+  fn normalizes_nbsp_as_space() {
+    crate::assert_html_eq!("<p>A&nbsp;B</p>", "<p>A B</p>");
+  }
+
+  #[test]
+  #[should_panic]
+  fn preserves_pre_whitespace() {
+    crate::assert_html_eq!(
+      "<pre>line  with  spaces</pre>",
+      "<pre>line with spaces</pre>"
+    );
+  }
+
+  #[test]
+  #[should_panic]
+  fn preserves_script_whitespace() {
+    crate::assert_html_eq!(
+      "<script>if (x) {\n  doThing();\n}</script>",
+      "<script>if (x) { doThing(); }</script>"
+    );
   }
 }
