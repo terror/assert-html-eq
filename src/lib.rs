@@ -8,6 +8,10 @@ fn is_whitespace_significant(tag: &str) -> bool {
   matches!(tag, "code" | "pre" | "script" | "style" | "textarea")
 }
 
+fn is_whitespace_significant_for_stack(stack: &[&str]) -> bool {
+  stack.iter().any(|tag| is_whitespace_significant(tag))
+}
+
 fn normalize_nbsp(text: &str) -> Cow<'_, str> {
   if text.contains('\u{00A0}') {
     let mut out = String::with_capacity(text.len());
@@ -23,7 +27,7 @@ fn normalize_nbsp(text: &str) -> Cow<'_, str> {
 }
 
 fn normalize_text_for<'a>(stack: &[&'a str], text: &str) -> String {
-  if stack.iter().any(|tag| is_whitespace_significant(tag)) {
+  if is_whitespace_significant_for_stack(stack) {
     text.to_string()
   } else {
     normalize_nbsp(text)
@@ -34,11 +38,11 @@ fn normalize_text_for<'a>(stack: &[&'a str], text: &str) -> String {
 }
 
 fn should_keep_text<'a>(stack: &[&'a str], text: &str) -> bool {
-  if text.trim().is_empty() {
-    stack.iter().any(|tag| is_whitespace_significant(tag))
-  } else {
-    true
+  if is_whitespace_significant_for_stack(stack) {
+    return true;
   }
+
+  normalize_nbsp(text).split_whitespace().next().is_some()
 }
 
 fn escape_text(input: &str) -> String {
@@ -108,6 +112,26 @@ struct Attr<'a> {
   value: Option<Cow<'a, str>>,
 }
 
+fn is_void_element(name: &str) -> bool {
+  matches!(
+    name,
+    "area"
+      | "base"
+      | "br"
+      | "col"
+      | "embed"
+      | "hr"
+      | "img"
+      | "input"
+      | "link"
+      | "meta"
+      | "param"
+      | "source"
+      | "track"
+      | "wbr"
+  )
+}
+
 fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attr<'a>> {
   let mut attrs = element
     .value()
@@ -175,10 +199,14 @@ fn write_element<'a>(
     .collect();
 
   if children.is_empty() {
-    buffer.push_str("></");
-    buffer.push_str(name);
-    buffer.push('>');
-    buffer.push('\n');
+    if is_void_element(name) {
+      buffer.push('>');
+      buffer.push('\n');
+    } else {
+      buffer.push_str("></");
+      buffer.push_str(name);
+      buffer.push_str(">\n");
+    }
     stack.pop();
     return;
   }
@@ -406,5 +434,28 @@ mod tests {
       "<script>if (x) {\n  doThing();\n}</script>",
       "<script>if (x) { doThing(); }</script>"
     );
+  }
+
+  #[test]
+  #[should_panic]
+  fn preserves_textarea_whitespace() {
+    crate::assert_html_eq!(
+      "<textarea>line  with  spaces</textarea>",
+      "<textarea>line with spaces</textarea>"
+    );
+  }
+
+  #[test]
+  #[should_panic]
+  fn preserves_style_whitespace() {
+    crate::assert_html_eq!(
+      "<style>body {\n  color: red;\n}</style>",
+      "<style>body { color: red; }</style>"
+    );
+  }
+
+  #[test]
+  fn treats_void_end_tags_equivalently() {
+    crate::assert_html_eq!("<input disabled>", "<input disabled></input>");
   }
 }
