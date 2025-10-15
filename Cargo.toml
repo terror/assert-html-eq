@@ -1,0 +1,8 @@
+[package]
+name = "assert-html-eq"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ego-tree = "0.10.0"
+scraper = "0.24.0"
