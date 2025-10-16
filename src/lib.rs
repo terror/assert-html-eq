@@ -59,17 +59,12 @@ const VOID_ELEMENTS: &[&str] = &[
   "param", "source", "track", "wbr",
 ];
 
+const WHITESPACE_SIGNIFICANT_ELEMENTS: &[&str] =
+  &["code", "pre", "script", "style", "textarea"];
+
 struct Attribute<'a> {
   name: &'a str,
   value: Option<Cow<'a, str>>,
-}
-
-fn is_whitespace_significant(tag: &str) -> bool {
-  matches!(tag, "code" | "pre" | "script" | "style" | "textarea")
-}
-
-fn is_whitespace_significant_for_stack(stack: &[&str]) -> bool {
-  stack.iter().any(|tag| is_whitespace_significant(tag))
 }
 
 fn normalize_nbsp(text: &str) -> Cow<'_, str> {
@@ -95,7 +90,10 @@ fn normalize_unicode(text: &str) -> Cow<'_, str> {
 }
 
 fn should_keep_text(stack: &[&str], text: &str) -> bool {
-  if is_whitespace_significant_for_stack(stack) {
+  if stack
+    .iter()
+    .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag))
+  {
     return true;
   }
 
@@ -253,7 +251,9 @@ fn write_element<'a>(
         let mut run_idx = idx;
         let mut pending_space = false;
 
-        let significant = is_whitespace_significant_for_stack(stack);
+        let significant = stack
+          .iter()
+          .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
 
         while run_idx < children.len() {
           match children[run_idx].value() {
