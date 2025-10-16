@@ -233,7 +233,9 @@ fn write_element<'a>(
   while let Some((child, tail)) = remaining.split_first() {
     match child.value() {
       Node::Element(_) => {
-        buffer.push('\n');
+        if !buffer.ends_with('\n') {
+          buffer.push('\n');
+        }
 
         write_element(
           buffer,
@@ -310,7 +312,9 @@ fn write_element<'a>(
         );
 
         if !joined.is_empty() {
-          buffer.push('\n');
+          if !buffer.ends_with('\n') {
+            buffer.push('\n');
+          }
           buffer.push_str(&child_indent);
           buffer.push_str(&escape_text(&joined));
         }
@@ -335,7 +339,9 @@ fn write_element<'a>(
     }
   }
 
-  buffer.push('\n');
+  if !buffer.ends_with('\n') {
+    buffer.push('\n');
+  }
   buffer.push_str(&indent);
   buffer.push_str("</");
   buffer.push_str(name);
@@ -444,7 +450,7 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-  use {super::*, scraper::Html};
+  use {super::*, indoc::indoc, scraper::Html};
 
   #[test]
   fn compares_html_strings() {
@@ -801,5 +807,61 @@ mod tests {
   #[test]
   fn duplicate_attributes_collapse_to_parser_behavior() {
     assert_html_eq!("<img alt=\"a\" alt=\"b\">", "<img alt=\"a\">");
+  }
+
+  #[test]
+  fn normalize_html_reconstructs_document_structure() {
+    let html = Html::parse_document(
+      "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title> \
+       Example </title></head><body><main><h1> Hello </h1><p>Test</p></main></body></html>",
+    );
+
+    let normalized = normalize_html(&html);
+
+    let expected = indoc! {r#"
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>
+            Example
+          </title>
+        </head>
+        <body>
+          <main>
+            <h1>
+              Hello
+            </h1>
+            <p>
+              Test
+            </p>
+          </main>
+        </body>
+      </html>"#};
+
+    assert_eq!(normalized, expected);
+  }
+
+  #[test]
+  fn normalize_html_escapes_text_content() {
+    let html = Html::parse_document(
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><p>5 < \
+       6 && 7 > 6</p></body></html>",
+    );
+
+    let normalized = normalize_html(&html);
+
+    let expected = indoc! {r#"
+      <html>
+        <head>
+          <meta charset="utf-8">
+        </head>
+        <body>
+          <p>
+            5 &lt; 6 &amp;&amp; 7 &gt; 6
+          </p>
+        </body>
+      </html>"#};
+
+    assert_eq!(normalized, expected);
   }
 }
