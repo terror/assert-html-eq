@@ -86,21 +86,6 @@ fn escape_text(input: &str) -> String {
   escaped
 }
 
-fn escape_attr_value(input: &str) -> String {
-  let mut escaped = String::with_capacity(input.len());
-
-  for ch in input.chars() {
-    match ch {
-      '&' => escaped.push_str("&amp;"),
-      '<' => escaped.push_str("&lt;"),
-      '"' => escaped.push_str("&quot;"),
-      _ => escaped.push(ch),
-    }
-  }
-
-  escaped
-}
-
 fn is_boolean_attribute(name: &str) -> bool {
   matches!(
     name,
@@ -221,7 +206,7 @@ fn write_element<'a>(
     buffer.push_str(key);
     if let Some(value) = value {
       buffer.push_str("=\"");
-      buffer.push_str(&escape_attr_value(value.as_ref()));
+      buffer.push_str(&escape_text(value.as_ref()));
       buffer.push('"');
     }
   }
@@ -472,11 +457,11 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-  use scraper::Html;
+  use {super::*, scraper::Html};
 
   #[test]
   fn compares_html_strings() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div><span>Hello</span></div>",
       "<div>
         <span>
@@ -488,7 +473,7 @@ mod tests {
 
   #[test]
   fn accepts_html_values() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       Html::parse_document("<p>Text</p>"),
       Html::parse_document("<p>Text</p>")
     );
@@ -497,12 +482,12 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn mismatch_panics() {
-    crate::assert_html_eq!("<div></div>", "<span></span>");
+    assert_html_eq!("<div></div>", "<span></span>");
   }
 
   #[test]
   fn ignores_comments() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div><!-- noisy --><span>Text</span></div>",
       "<div><span>Text</span></div>"
     );
@@ -510,7 +495,7 @@ mod tests {
 
   #[test]
   fn normalizes_class_token_order() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div class=\"b a c b\"></div>",
       "<div class=\"a b c\"></div>"
     );
@@ -518,7 +503,7 @@ mod tests {
 
   #[test]
   fn normalizes_boolean_attributes() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<input type=\"checkbox\" disabled=\"disabled\" checked=\"\" />",
       "<input type=\"checkbox\" disabled checked>"
     );
@@ -526,13 +511,13 @@ mod tests {
 
   #[test]
   fn normalizes_nbsp_as_space() {
-    crate::assert_html_eq!("<p>A&nbsp;B</p>", "<p>A B</p>");
+    assert_html_eq!("<p>A&nbsp;B</p>", "<p>A B</p>");
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_pre_whitespace() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<pre>line  with  spaces</pre>",
       "<pre>line with spaces</pre>"
     );
@@ -541,7 +526,7 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_script_whitespace() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<script>if (x) {\n  doThing();\n}</script>",
       "<script>if (x) { doThing(); }</script>"
     );
@@ -550,7 +535,7 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_textarea_whitespace() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<textarea>line  with  spaces</textarea>",
       "<textarea>line with spaces</textarea>"
     );
@@ -559,7 +544,7 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_style_whitespace() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<style>body {\n  color: red;\n}</style>",
       "<style>body { color: red; }</style>"
     );
@@ -567,36 +552,37 @@ mod tests {
 
   #[test]
   fn treats_void_end_tags_equivalently() {
-    crate::assert_html_eq!("<input disabled>", "<input disabled></input>");
+    assert_html_eq!("<input disabled>", "<input disabled></input>");
   }
 
   #[test]
   fn coalesces_adjacent_text_nodes() {
-    crate::assert_html_eq!(
-      "<p>Hello<!-- comment --> world</p>",
-      "<p>Hello world</p>"
-    );
+    assert_html_eq!("<p>Hello<!-- comment --> world</p>", "<p>Hello world</p>");
   }
 
   #[test]
   fn normalizes_other_token_set_attributes() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<link rel=\"stylesheet preload\">",
       "<link rel=\"preload stylesheet\">"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<iframe sandbox=\"allow-same-origin allow-scripts\"></iframe>",
       "<iframe sandbox=\"allow-scripts allow-same-origin\"></iframe>"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<div part=\"card badge\"></div>",
       "<div part=\"badge card\"></div>"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<link rel=\"Preload StyleSheet\">",
       "<link rel=\"stylesheet preload\">"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<iframe sandbox=\"Allow-Same-Origin ALLOW-SCRIPTS\"></iframe>",
       "<iframe sandbox=\"allow-scripts allow-same-origin\"></iframe>"
     );
@@ -604,22 +590,23 @@ mod tests {
 
   #[test]
   fn normalizes_unicode_text() {
-    crate::assert_html_eq!("<p>Café</p>", "<p>Cafe\u{0301}</p>");
+    assert_html_eq!("<p>Café</p>", "<p>Cafe\u{0301}</p>");
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn does_not_normalize_unicode_in_significant_whitespace() {
-    crate::assert_html_eq!("<pre>Café</pre>", "<pre>Cafe\u{0301}</pre>");
+    assert_html_eq!("<pre>Café</pre>", "<pre>Cafe\u{0301}</pre>");
   }
 
   #[test]
   fn entities_in_text_and_attrs_compare_equal() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<p>5 &lt; 6 &amp;&amp; 7 &gt; 6</p>",
       "<p>5 < 6 && 7 > 6</p>"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<a href=\"/?a=1&amp;b=2\">x</a>",
       "<a href='/?a=1&b=2'>x</a>"
     );
@@ -627,58 +614,55 @@ mod tests {
 
   #[test]
   fn unusual_whitespace_chars_collapse() {
-    crate::assert_html_eq!("<p>A\u{2009}\u{2003}B</p>", "<p>A B</p>");
+    assert_html_eq!("<p>A\u{2009}\u{2003}B</p>", "<p>A B</p>");
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn nbsp_differs_from_space_in_significant_contexts() {
-    crate::assert_html_eq!("<pre>A\u{00A0}B</pre>", "<pre>A B</pre>");
+    assert_html_eq!("<pre>A\u{00A0}B</pre>", "<pre>A B</pre>");
   }
 
   #[test]
   fn nbsp_entity_and_char_are_equivalent_outside_significant_contexts() {
-    crate::assert_html_eq!("<p>A&nbsp;B</p>", "<p>A\u{00A0}B</p>");
+    assert_html_eq!("<p>A&nbsp;B</p>", "<p>A\u{00A0}B</p>");
   }
 
   #[test]
   fn whitespace_around_comments_in_significant_contexts_isnt_invented() {
-    crate::assert_html_eq!("<pre>foo<!--x-->bar</pre>", "<pre>foobar</pre>");
+    assert_html_eq!("<pre>foo<!--x-->bar</pre>", "<pre>foobar</pre>");
   }
 
   #[test]
   fn drops_whitespace_only_children_in_nonsignificant_contexts() {
-    crate::assert_html_eq!("<div>   \n\t  </div>", "<div></div>");
+    assert_html_eq!("<div>   \n\t  </div>", "<div></div>");
   }
 
   #[test]
   fn leading_trailing_whitespace_inside_block_is_ignored() {
-    crate::assert_html_eq!("<div>\n   hello  \n</div>", "<div>hello</div>");
+    assert_html_eq!("<div>\n   hello  \n</div>", "<div>hello</div>");
   }
 
   #[test]
   fn collapses_leading_and_trailing_spaces_across_text_runs() {
-    crate::assert_html_eq!("<p> A   B </p>", "<p>A B</p>");
-    crate::assert_html_eq!("<p>A&nbsp;&nbsp;B</p>", "<p>A B</p>");
+    assert_html_eq!("<p> A   B </p>", "<p>A B</p>");
+    assert_html_eq!("<p>A&nbsp;&nbsp;B</p>", "<p>A B</p>");
   }
 
   #[test]
   fn mixed_text_runs_around_inline_elements() {
-    crate::assert_html_eq!(
-      "<p> A <em>  B  </em>  C </p>",
-      "<p>A <em>B</em> C</p>"
-    );
+    assert_html_eq!("<p> A <em>  B  </em>  C </p>", "<p>A <em>B</em> C</p>");
   }
 
   #[test]
   fn spacing_around_inline_elements_is_semantic() {
-    crate::assert_html_eq!("<p>a <em>b</em> c</p>", "<p>a <em>b</em> c</p>");
-    crate::assert_html_eq!("<p>a<em>b</em>c</p>", "<p>a<em>b</em>c</p>");
+    assert_html_eq!("<p>a <em>b</em> c</p>", "<p>a <em>b</em> c</p>");
+    assert_html_eq!("<p>a<em>b</em>c</p>", "<p>a<em>b</em>c</p>");
   }
 
   #[test]
   fn attribute_order_is_ignored() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<img alt=\"x\" src=\"/a.png\">",
       "<img src=\"/a.png\" alt=\"x\">"
     );
@@ -686,7 +670,7 @@ mod tests {
 
   #[test]
   fn attribute_quoting_style_is_ignored() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div title=\"Tom &amp; Jerry\"></div>",
       "<div title='Tom &amp; Jerry'></div>"
     );
@@ -694,63 +678,55 @@ mod tests {
 
   #[test]
   fn self_closing_non_void_normalizes() {
-    crate::assert_html_eq!("<div/>", "<div></div>");
+    assert_html_eq!("<div/>", "<div></div>");
   }
 
   #[test]
   fn void_element_syntax_variants_are_equivalent() {
-    crate::assert_html_eq!("<br>", "<br/>");
-    crate::assert_html_eq!("<img src=x>", "<img src=\"x\"/>");
+    assert_html_eq!("<br>", "<br/>");
+    assert_html_eq!("<img src=x>", "<img src=\"x\"/>");
   }
 
   #[test]
   fn duplicate_tokens_in_token_set_attrs_are_deduped() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<link rel=\"preload preload stylesheet\">",
       "<link rel=\"stylesheet preload\">"
     );
-    crate::assert_html_eq!(
+
+    assert_html_eq!(
       "<iframe sandbox=\"allow-scripts allow-scripts allow-same-origin\">",
       "<iframe sandbox=\"allow-same-origin allow-scripts\">"
     );
-    crate::assert_html_eq!("<div class=\"a  a   b\">", "<div class=\"a b\">");
+
+    assert_html_eq!("<div class=\"a  a   b\">", "<div class=\"a b\">");
   }
 
   #[test]
   fn boolean_attribute_forms_are_equivalent() {
-    crate::assert_html_eq!("<input disabled>", "<input disabled=\"\">");
-    crate::assert_html_eq!("<input disabled>", "<input disabled=disabled>");
+    assert_html_eq!("<input disabled>", "<input disabled=\"\">");
+    assert_html_eq!("<input disabled>", "<input disabled=disabled>");
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn non_boolean_enumerated_attrs_are_not_collapsed() {
-    // contenteditable is NOT a boolean attribute; value matters.
-    crate::assert_html_eq!(
-      "<div contenteditable=\"false\"></div>",
-      "<div></div>"
-    );
+    assert_html_eq!("<div contenteditable=\"false\"></div>", "<div></div>");
   }
 
   #[test]
   fn html_case_insensitivity_normalizes() {
-    // html5ever lowercases tag/attr names for HTML; should compare equal.
-    crate::assert_html_eq!(
-      "<DIV CLASS=\"B A\"></DIV>",
-      "<div class=\"A B\"></div>"
-    );
+    assert_html_eq!("<DIV CLASS=\"B A\"></DIV>", "<div class=\"A B\"></div>");
   }
 
   #[test]
   fn doctype_is_ignored_for_semantics() {
-    crate::assert_html_eq!("<!doctype html><div>ok</div>", "<div>ok</div>");
+    assert_html_eq!("<!doctype html><div>ok</div>", "<div>ok</div>");
   }
 
   #[test]
   fn template_content_is_compared_if_supported() {
-    // Depending on scraper’s traversal of <template> content, this should pass
-    // if your write_element walks template’s content.
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<template><span> A   B </span></template>",
       "<template><span>A B</span></template>"
     );
@@ -759,9 +735,7 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn unicode_normalization_isnt_applied_in_significant_contexts() {
-    // In <script>/<style>/<pre>/<textarea>/<code>, composition differences should remain different
-    // if you skipped NFC in significant contexts.
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<script>const name = 'Cafe\u{0301}';</script>",
       "<script>const name = 'Café';</script>"
     );
@@ -769,12 +743,12 @@ mod tests {
 
   #[test]
   fn mixed_adjacent_text_and_nodes_are_coalesced_correctly() {
-    crate::assert_html_eq!("<p>a<!--x-->  b<!--y-->   c</p>", "<p>a b c</p>");
+    assert_html_eq!("<p>a<!--x-->  b<!--y-->   c</p>", "<p>a b c</p>");
   }
 
   #[test]
   fn nested_structure_with_whitespace_noise() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div>\n  <ul>\n    <li> 1 </li>\n    <li>  2</li>\n  </ul>\n</div>",
       "<div><ul><li>1</li><li>2</li></ul></div>"
     );
@@ -782,7 +756,7 @@ mod tests {
 
   #[test]
   fn comment_boundaries_between_text_runs_not_significant() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<p>Hello<!--a--> \n <!--b-->world</p>",
       "<p>Hello world</p>"
     );
@@ -790,7 +764,7 @@ mod tests {
 
   #[test]
   fn whitespace_only_text_runs_between_elements_are_ignored() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div>a</div>\n   \t  <div>b</div>",
       "<div>a</div><div>b</div>"
     );
@@ -799,15 +773,12 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn code_whitespace_matters() {
-    crate::assert_html_eq!(
-      "<code>fn  main(){}</code>",
-      "<code>fn main(){}</code>"
-    );
+    assert_html_eq!("<code>fn  main(){}</code>", "<code>fn main(){}</code>");
   }
 
   #[test]
   fn code_entities_compare_equal() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<code>&quot;test&quot; &amp; 'foo'</code>",
       "<code>\"test\" &amp; 'foo'</code>"
     );
@@ -816,31 +787,25 @@ mod tests {
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn different_child_order_is_detected() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<ul><li>1</li><li>2</li></ul>",
       "<ul><li>2</li><li>1</li></ul>"
     );
   }
 
   #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_style_attribute_verbatim() {
-    // style is NOT a token set; spacing differences are significant.
-    #[allow(unused)]
-    fn style_spacing_matters() {
-      #[should_panic(expected = "assert_html_eq! failed")]
-      fn _inner() {
-        crate::assert_html_eq!(
-          "<div style=\"color: red;  margin:0\"></div>",
-          "<div style=\"color:red;margin:0\"></div>"
-        );
-      }
-    }
+    assert_html_eq!(
+      "<div style=\"color: red;  margin:0\"></div>",
+      "<div style=\"color:red;margin:0\"></div>"
+    );
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
   fn attribute_whitespace_is_preserved_for_non_token_sets() {
-    crate::assert_html_eq!(
+    assert_html_eq!(
       "<div title=\"hello  world\"></div>",
       "<div title=\"hello world\"></div>"
     );
@@ -848,6 +813,6 @@ mod tests {
 
   #[test]
   fn duplicate_attributes_collapse_to_parser_behavior() {
-    crate::assert_html_eq!("<img alt=\"a\" alt=\"b\">", "<img alt=\"a\">");
+    assert_html_eq!("<img alt=\"a\" alt=\"b\">", "<img alt=\"a\">");
   }
 }
