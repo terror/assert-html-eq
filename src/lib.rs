@@ -191,7 +191,7 @@ fn write_element<'a>(
 
   stack.push(name);
 
-  let children: Vec<NodeRef<'a, Node>> = element
+  let children = element
     .children()
     .filter(|child| {
       !matches!(
@@ -199,7 +199,7 @@ fn write_element<'a>(
         Node::Comment(_) | Node::Document | Node::Fragment
       )
     })
-    .collect();
+    .collect::<Vec<NodeRef<'a, Node>>>();
 
   let has_visible_children = children.iter().any(|child| match child.value() {
     Node::Text(text) => should_keep_text(stack, text),
@@ -228,39 +228,44 @@ fn write_element<'a>(
 
   let child_indent = "  ".repeat(depth + 1);
 
-  let mut idx = 0;
+  let mut remaining = children.as_slice();
 
-  while idx < children.len() {
-    let child = children[idx];
-
+  while let Some((child, tail)) = remaining.split_first() {
     match child.value() {
       Node::Element(_) => {
         buffer.push('\n');
 
         write_element(
           buffer,
-          &ElementRef::wrap(child).expect("child must be an element"),
+          &ElementRef::wrap(*child).expect("child must be an element"),
           depth + 1,
           stack,
         );
 
-        idx += 1;
+        remaining = tail;
       }
       Node::Text(_) => {
-        let mut joined = String::new();
-        let mut run_idx = idx;
-        let mut pending_space = false;
+        let text_run_len = 1
+          + tail
+            .iter()
+            .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
+            .count();
+
+        let (text_run, rest) = remaining.split_at(text_run_len);
 
         let significant = stack
           .iter()
           .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
 
-        while run_idx < children.len() {
-          match children[run_idx].value() {
-            Node::Text(text) => {
+        let (joined, _) = text_run.iter().fold(
+          (String::new(), false),
+          |(mut acc, pending_space), sibling| {
+            let mut next_pending = pending_space;
+
+            if let Node::Text(text) = sibling.value() {
               if significant {
                 if !text.is_empty() {
-                  joined.push_str(text);
+                  acc.push_str(text);
                 }
               } else {
                 let unicode = normalize_unicode(text);
@@ -286,24 +291,23 @@ fn write_element<'a>(
                   .join(" ");
 
                 if !normalized.is_empty() {
-                  if !joined.is_empty()
-                    && (pending_space || has_leading_ws)
-                    && !joined.ends_with(' ')
+                  if !acc.is_empty()
+                    && (next_pending || has_leading_ws)
+                    && !acc.ends_with(' ')
                   {
-                    joined.push(' ');
+                    acc.push(' ');
                   }
-                  joined.push_str(&normalized);
-                  pending_space = has_trailing_ws;
+                  acc.push_str(&normalized);
+                  next_pending = has_trailing_ws;
                 } else if has_trailing_ws {
-                  pending_space = true;
+                  next_pending = true;
                 }
               }
-
-              run_idx += 1;
             }
-            _ => break,
-          }
-        }
+
+            (acc, next_pending)
+          },
+        );
 
         if !joined.is_empty() {
           buffer.push('\n');
@@ -311,22 +315,22 @@ fn write_element<'a>(
           buffer.push_str(&escape_text(&joined));
         }
 
-        idx = run_idx;
+        remaining = rest;
       }
       Node::Doctype(doctype) => {
         buffer.push('\n');
         buffer.push_str(&child_indent);
         let _ = write!(buffer, "{doctype:?}");
-        idx += 1;
+        remaining = tail;
       }
       Node::ProcessingInstruction(pi) => {
         buffer.push('\n');
         buffer.push_str(&child_indent);
         let _ = write!(buffer, "{pi:?}");
-        idx += 1;
+        remaining = tail;
       }
       Node::Document | Node::Fragment | Node::Comment(_) => {
-        idx += 1;
+        remaining = tail;
       }
     }
   }
