@@ -1,9 +1,32 @@
 use {
   ego_tree::NodeRef,
   scraper::{ElementRef, Html, Node},
-  std::{borrow::Cow, ops::Deref},
+  std::{borrow::Cow, fmt::Write},
   unicode_normalization::{UnicodeNormalization, is_nfc},
 };
+
+#[macro_export]
+macro_rules! assert_html_eq {
+  ($actual:expr, $expected:expr $(,)?) => {{
+    $crate::__private::assert_html_eq(
+      $crate::__private::into_html($actual),
+      $crate::__private::into_html($expected),
+      None
+    );
+  }};
+  ($actual:expr, $expected:expr, $($arg:tt)+) => {{
+    $crate::__private::assert_html_eq(
+      $crate::__private::into_html($actual),
+      $crate::__private::into_html($expected),
+      Some(format!($($arg)+)),
+    );
+  }};
+}
+
+struct Attr<'a> {
+  name: &'a str,
+  value: Option<Cow<'a, str>>,
+}
 
 fn is_whitespace_significant(tag: &str) -> bool {
   matches!(tag, "code" | "pre" | "script" | "style" | "textarea")
@@ -35,12 +58,13 @@ fn normalize_unicode(text: &str) -> Cow<'_, str> {
   }
 }
 
-fn should_keep_text<'a>(stack: &[&'a str], text: &str) -> bool {
+fn should_keep_text(stack: &[&str], text: &str) -> bool {
   if is_whitespace_significant_for_stack(stack) {
     return true;
   }
 
   let unicode = normalize_unicode(text);
+
   normalize_nbsp(unicode.as_ref())
     .split_whitespace()
     .next()
@@ -132,11 +156,6 @@ fn normalize_token_set(name: &str, value: &str) -> String {
   tokens.join(" ")
 }
 
-struct Attr<'a> {
-  name: &'a str,
-  value: Option<Cow<'a, str>>,
-}
-
 fn is_void_element(name: &str) -> bool {
   matches!(
     name,
@@ -220,9 +239,10 @@ fn write_element<'a>(
     .collect();
 
   let has_visible_children = children.iter().any(|child| match child.value() {
-    Node::Text(text) => should_keep_text(stack, text.deref()),
-    Node::Element(_) => true,
-    Node::Doctype(_) | Node::ProcessingInstruction(_) => true,
+    Node::Text(text) => should_keep_text(stack, text),
+    Node::Element(_) | Node::Doctype(_) | Node::ProcessingInstruction(_) => {
+      true
+    }
     _ => false,
   });
 
@@ -266,35 +286,31 @@ fn write_element<'a>(
       Node::Text(_) => {
         let mut joined = String::new();
         let mut run_idx = idx;
-        let significant = is_whitespace_significant_for_stack(stack);
         let mut pending_space = false;
+
+        let significant = is_whitespace_significant_for_stack(stack);
 
         while run_idx < children.len() {
           match children[run_idx].value() {
             Node::Text(text) => {
               if significant {
-                let content = text.deref();
-
-                if !content.is_empty() {
-                  joined.push_str(content);
+                if !text.is_empty() {
+                  joined.push_str(text);
                 }
               } else {
-                let unicode = normalize_unicode(text.deref());
+                let unicode = normalize_unicode(text);
                 let normalized_nbsp = normalize_nbsp(unicode.as_ref());
                 let normalized_ref = normalized_nbsp.as_ref();
 
                 let has_leading_ws = normalized_ref
                   .chars()
                   .next()
-                  .map(|ch| ch.is_whitespace())
-                  .unwrap_or(false);
+                  .is_some_and(char::is_whitespace);
 
                 let has_trailing_ws = normalized_ref
                   .chars()
-                  .rev()
-                  .next()
-                  .map(|ch| ch.is_whitespace())
-                  .unwrap_or(false);
+                  .next_back()
+                  .is_some_and(char::is_whitespace);
 
                 let normalized = normalized_ref
                   .split_whitespace()
@@ -332,19 +348,16 @@ fn write_element<'a>(
       Node::Doctype(doctype) => {
         buffer.push('\n');
         buffer.push_str(&child_indent);
-        buffer.push_str(&format!("{doctype:?}"));
+        let _ = write!(buffer, "{doctype:?}");
         idx += 1;
       }
       Node::ProcessingInstruction(pi) => {
         buffer.push('\n');
         buffer.push_str(&child_indent);
-        buffer.push_str(&format!("{pi:?}"));
+        let _ = write!(buffer, "{pi:?}");
         idx += 1;
       }
-      Node::Document | Node::Fragment => {
-        idx += 1;
-      }
-      Node::Comment(_) => {
+      Node::Document | Node::Fragment | Node::Comment(_) => {
         idx += 1;
       }
     }
@@ -372,36 +385,11 @@ pub mod __private {
   use {
     super::normalize_html,
     scraper::Html,
-    std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    std::{
+      any::Any,
+      panic::{AssertUnwindSafe, catch_unwind},
+    },
   };
-
-  pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
-    let (actual_normalized, expected_normalized) =
-      (normalize_html(&actual), normalize_html(&expected));
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-      pretty_assertions::assert_eq!(expected_normalized, actual_normalized);
-    }));
-
-    match result {
-      Ok(_) => {}
-      Err(payload) => {
-        if let Some(message) = custom {
-          let detail = if let Some(msg) = payload.downcast_ref::<String>() {
-            msg.clone()
-          } else if let Some(msg) = payload.downcast_ref::<&str>() {
-            (*msg).to_string()
-          } else {
-            "assert_html_eq! failed".to_string()
-          };
-
-          panic!("{message}\n{detail}");
-        } else {
-          resume_unwind(payload);
-        }
-      }
-    }
-  }
 
   pub trait IntoHtml {
     fn into_html(self) -> Html;
@@ -413,13 +401,13 @@ pub mod __private {
     }
   }
 
-  impl<'a> IntoHtml for &'a Html {
+  impl IntoHtml for &Html {
     fn into_html(self) -> Html {
       self.clone()
     }
   }
 
-  impl<'a> IntoHtml for &'a str {
+  impl IntoHtml for &str {
     fn into_html(self) -> Html {
       Html::parse_document(self)
     }
@@ -431,33 +419,55 @@ pub mod __private {
     }
   }
 
-  impl<'a> IntoHtml for &'a String {
+  impl IntoHtml for &String {
     fn into_html(self) -> Html {
       Html::parse_document(self)
+    }
+  }
+
+  fn panic_with_detail(custom: Option<String>, detail: String) -> ! {
+    match custom {
+      Some(message) => panic!("{message}\nassert_html_eq! failed:\n{detail}"),
+      None => panic!("assert_html_eq! failed:\n{detail}"),
+    }
+  }
+
+  fn panic_without_detail(custom: Option<String>) -> ! {
+    match custom {
+      Some(message) => panic!("{message}\nassert_html_eq! failed"),
+      None => panic!("assert_html_eq! failed"),
+    }
+  }
+
+  fn panic_with_payload(
+    custom: Option<String>,
+    payload: Box<dyn Any + Send>,
+  ) -> ! {
+    match payload.downcast::<String>() {
+      Ok(message) => panic_with_detail(custom, *message),
+      Err(payload) => match payload.downcast::<&str>() {
+        Ok(message) => panic_with_detail(custom, (*message).to_string()),
+        Err(_) => panic_without_detail(custom),
+      },
     }
   }
 
   pub fn into_html<T: IntoHtml>(input: T) -> Html {
     input.into_html()
   }
-}
 
-#[macro_export]
-macro_rules! assert_html_eq {
-  ($actual:expr, $expected:expr $(,)?) => {{
-    $crate::__private::assert_html_eq(
-      $crate::__private::into_html($actual),
-      $crate::__private::into_html($expected),
-      None
-    );
-  }};
-  ($actual:expr, $expected:expr, $($arg:tt)+) => {{
-    $crate::__private::assert_html_eq(
-      $crate::__private::into_html($actual),
-      $crate::__private::into_html($expected),
-      Some(format!($($arg)+)),
-    );
-  }};
+  pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
+    let (actual_normalized, expected_normalized) =
+      (normalize_html(&actual), normalize_html(&expected));
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+      pretty_assertions::assert_eq!(expected_normalized, actual_normalized);
+    }));
+
+    if let Err(payload) = result {
+      panic_with_payload(custom, payload);
+    }
+  }
 }
 
 #[cfg(test)]
@@ -485,7 +495,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn mismatch_panics() {
     crate::assert_html_eq!("<div></div>", "<span></span>");
   }
@@ -520,7 +530,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_pre_whitespace() {
     crate::assert_html_eq!(
       "<pre>line  with  spaces</pre>",
@@ -529,7 +539,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_script_whitespace() {
     crate::assert_html_eq!(
       "<script>if (x) {\n  doThing();\n}</script>",
@@ -538,7 +548,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_textarea_whitespace() {
     crate::assert_html_eq!(
       "<textarea>line  with  spaces</textarea>",
@@ -547,7 +557,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_style_whitespace() {
     crate::assert_html_eq!(
       "<style>body {\n  color: red;\n}</style>",
@@ -598,7 +608,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn does_not_normalize_unicode_in_significant_whitespace() {
     crate::assert_html_eq!("<pre>Café</pre>", "<pre>Cafe\u{0301}</pre>");
   }
@@ -621,7 +631,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn nbsp_differs_from_space_in_significant_contexts() {
     crate::assert_html_eq!("<pre>A\u{00A0}B</pre>", "<pre>A B</pre>");
   }
@@ -713,7 +723,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn non_boolean_enumerated_attrs_are_not_collapsed() {
     // contenteditable is NOT a boolean attribute; value matters.
     crate::assert_html_eq!(
@@ -747,7 +757,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn unicode_normalization_isnt_applied_in_significant_contexts() {
     // In <script>/<style>/<pre>/<textarea>/<code>, composition differences should remain different
     // if you skipped NFC in significant contexts.
@@ -787,7 +797,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn code_whitespace_matters() {
     crate::assert_html_eq!(
       "<code>fn  main(){}</code>",
@@ -804,7 +814,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn different_child_order_is_detected() {
     crate::assert_html_eq!(
       "<ul><li>1</li><li>2</li></ul>",
@@ -817,7 +827,7 @@ mod tests {
     // style is NOT a token set; spacing differences are significant.
     #[allow(unused)]
     fn style_spacing_matters() {
-      #[should_panic]
+      #[should_panic(expected = "assert_html_eq! failed")]
       fn _inner() {
         crate::assert_html_eq!(
           "<div style=\"color: red;  margin:0\"></div>",
@@ -828,7 +838,7 @@ mod tests {
   }
 
   #[test]
-  #[should_panic]
+  #[should_panic(expected = "assert_html_eq! failed")]
   fn attribute_whitespace_is_preserved_for_non_token_sets() {
     crate::assert_html_eq!(
       "<div title=\"hello  world\"></div>",
