@@ -23,7 +23,43 @@ macro_rules! assert_html_eq {
   }};
 }
 
-struct Attr<'a> {
+const BOOLEAN_ATTRIBUTES: &[&str] = &[
+  "allowfullscreen",
+  "async",
+  "autofocus",
+  "autoplay",
+  "checked",
+  "controls",
+  "default",
+  "defer",
+  "disabled",
+  "formnovalidate",
+  "hidden",
+  "inert",
+  "ismap",
+  "itemscope",
+  "loop",
+  "multiple",
+  "muted",
+  "nomodule",
+  "novalidate",
+  "open",
+  "playsinline",
+  "readonly",
+  "required",
+  "reversed",
+  "selected",
+  "truespeed",
+];
+
+const TOKEN_SET_ATTRIBUTES: &[&str] = &["class", "part", "rel", "sandbox"];
+
+const VOID_ELEMENTS: &[&str] = &[
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+  "param", "source", "track", "wbr",
+];
+
+struct Attribute<'a> {
   name: &'a str,
   value: Option<Cow<'a, str>>,
 }
@@ -86,42 +122,6 @@ fn escape_text(input: &str) -> String {
   escaped
 }
 
-fn is_boolean_attribute(name: &str) -> bool {
-  matches!(
-    name,
-    "allowfullscreen"
-      | "async"
-      | "autofocus"
-      | "autoplay"
-      | "checked"
-      | "controls"
-      | "default"
-      | "defer"
-      | "disabled"
-      | "formnovalidate"
-      | "hidden"
-      | "inert"
-      | "ismap"
-      | "itemscope"
-      | "loop"
-      | "multiple"
-      | "muted"
-      | "nomodule"
-      | "novalidate"
-      | "open"
-      | "playsinline"
-      | "readonly"
-      | "required"
-      | "reversed"
-      | "selected"
-      | "truespeed"
-  )
-}
-
-fn is_token_set_attr(name: &str) -> bool {
-  matches!(name, "class" | "part" | "rel" | "sandbox")
-}
-
 fn normalize_token_set(name: &str, value: &str) -> String {
   let lowercase = matches!(name, "part" | "rel" | "sandbox");
 
@@ -141,40 +141,20 @@ fn normalize_token_set(name: &str, value: &str) -> String {
   tokens.join(" ")
 }
 
-fn is_void_element(name: &str) -> bool {
-  matches!(
-    name,
-    "area"
-      | "base"
-      | "br"
-      | "col"
-      | "embed"
-      | "hr"
-      | "img"
-      | "input"
-      | "link"
-      | "meta"
-      | "param"
-      | "source"
-      | "track"
-      | "wbr"
-  )
-}
-
-fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attr<'a>> {
+fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
   let mut attrs = element
     .value()
     .attrs()
     .map(|(name, value)| {
-      if is_token_set_attr(name) {
-        Attr {
+      if TOKEN_SET_ATTRIBUTES.contains(&name) {
+        Attribute {
           name,
           value: Some(Cow::Owned(normalize_token_set(name, value))),
         }
-      } else if is_boolean_attribute(name) {
-        Attr { name, value: None }
+      } else if BOOLEAN_ATTRIBUTES.contains(&name) {
+        Attribute { name, value: None }
       } else {
-        Attr {
+        Attribute {
           name,
           value: Some(Cow::Borrowed(value)),
         }
@@ -201,7 +181,7 @@ fn write_element<'a>(
 
   let attrs = normalize_attributes(element);
 
-  for Attr { name: key, value } in attrs {
+  for Attribute { name: key, value } in attrs {
     buffer.push(' ');
     buffer.push_str(key);
     if let Some(value) = value {
@@ -232,7 +212,7 @@ fn write_element<'a>(
   });
 
   if !has_visible_children {
-    if is_void_element(name) {
+    if VOID_ELEMENTS.contains(&name) {
       buffer.push('>');
       buffer.push('\n');
     } else {
@@ -284,20 +264,23 @@ fn write_element<'a>(
                 }
               } else {
                 let unicode = normalize_unicode(text);
-                let normalized_nbsp = normalize_nbsp(unicode.as_ref());
-                let normalized_ref = normalized_nbsp.as_ref();
 
-                let has_leading_ws = normalized_ref
+                let normalized_nbsp = normalize_nbsp(unicode.as_ref());
+
+                let has_leading_ws = normalized_nbsp
+                  .as_ref()
                   .chars()
                   .next()
                   .is_some_and(char::is_whitespace);
 
-                let has_trailing_ws = normalized_ref
+                let has_trailing_ws = normalized_nbsp
+                  .as_ref()
                   .chars()
                   .next_back()
                   .is_some_and(char::is_whitespace);
 
-                let normalized = normalized_ref
+                let normalized = normalized_nbsp
+                  .as_ref()
                   .split_whitespace()
                   .collect::<Vec<_>>()
                   .join(" ");
