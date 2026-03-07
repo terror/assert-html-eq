@@ -304,14 +304,7 @@ fn normalize_html(html: &Html) -> String {
 
 #[doc(hidden)]
 pub mod __private {
-  use {
-    super::normalize_html,
-    scraper::Html,
-    std::{
-      any::Any,
-      panic::{AssertUnwindSafe, catch_unwind},
-    },
-  };
+  use {super::normalize_html, scraper::Html};
 
   pub trait IntoHtml {
     fn into_html(self) -> Html;
@@ -347,47 +340,23 @@ pub mod __private {
     }
   }
 
-  fn panic_with_detail(custom: Option<String>, detail: String) -> ! {
-    match custom {
-      Some(message) => panic!("{message}\nassert_html_eq! failed:\n{detail}"),
-      None => panic!("assert_html_eq! failed:\n{detail}"),
-    }
-  }
-
-  fn panic_without_detail(custom: Option<String>) -> ! {
-    match custom {
-      Some(message) => panic!("{message}\nassert_html_eq! failed"),
-      None => panic!("assert_html_eq! failed"),
-    }
-  }
-
-  fn panic_with_payload(
-    custom: Option<String>,
-    payload: Box<dyn Any + Send>,
-  ) -> ! {
-    match payload.downcast::<String>() {
-      Ok(message) => panic_with_detail(custom, *message),
-      Err(payload) => match payload.downcast::<&str>() {
-        Ok(message) => panic_with_detail(custom, (*message).to_string()),
-        Err(_) => panic_without_detail(custom),
-      },
-    }
-  }
-
   pub fn into_html<T: IntoHtml>(input: T) -> Html {
     input.into_html()
   }
 
   pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
-    let (actual_normalized, expected_normalized) =
+    let (actual, expected) =
       (normalize_html(&actual), normalize_html(&expected));
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-      pretty_assertions::assert_eq!(expected_normalized, actual_normalized);
-    }));
+    if actual == expected {
+      return;
+    }
 
-    if let Err(payload) = result {
-      panic_with_payload(custom, payload);
+    let diff = pretty_assertions::StrComparison::new(&expected, &actual);
+
+    match custom {
+      Some(message) => panic!("{message}\nassert_html_eq! failed:\n{diff}"),
+      None => panic!("assert_html_eq! failed:\n{diff}"),
     }
   }
 }
