@@ -258,57 +258,21 @@ fn write_element<'a>(
           .iter()
           .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
 
-        let (joined, _) = text_run.iter().fold(
-          (String::new(), false),
-          |(mut acc, pending_space), sibling| {
-            let mut next_pending = pending_space;
+        let raw = text_run
+          .iter()
+          .filter_map(|n| match n.value() {
+            Node::Text(t) => Some(&**t),
+            _ => None,
+          })
+          .collect::<String>();
 
-            if let Node::Text(text) = sibling.value() {
-              if significant {
-                if !text.is_empty() {
-                  acc.push_str(text);
-                }
-              } else {
-                let unicode = normalize_unicode(text);
-
-                let normalized_nbsp = normalize_nbsp(unicode.as_ref());
-
-                let has_leading_ws = normalized_nbsp
-                  .as_ref()
-                  .chars()
-                  .next()
-                  .is_some_and(char::is_whitespace);
-
-                let has_trailing_ws = normalized_nbsp
-                  .as_ref()
-                  .chars()
-                  .next_back()
-                  .is_some_and(char::is_whitespace);
-
-                let normalized = normalized_nbsp
-                  .as_ref()
-                  .split_whitespace()
-                  .collect::<Vec<_>>()
-                  .join(" ");
-
-                if !normalized.is_empty() {
-                  if !acc.is_empty()
-                    && (next_pending || has_leading_ws)
-                    && !acc.ends_with(' ')
-                  {
-                    acc.push(' ');
-                  }
-                  acc.push_str(&normalized);
-                  next_pending = has_trailing_ws;
-                } else if has_trailing_ws {
-                  next_pending = true;
-                }
-              }
-            }
-
-            (acc, next_pending)
-          },
-        );
+        let joined = if significant {
+          raw
+        } else {
+          let unicode = normalize_unicode(&raw);
+          let normalized = normalize_nbsp(unicode.as_ref());
+          normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
 
         if !joined.is_empty() {
           if !buffer.ends_with('\n') {
