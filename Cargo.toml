@@ -3,14 +3,6 @@ name = "assert-html-eq"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-pretty_assertions = "1.4.1"
-scraper = "0.24.0"
-unicode-normalization = "0.1.24"
-
-[dev-dependencies]
-indoc = "2.0.5"
-
 [lints.rust]
 mismatched_lifetime_syntaxes = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
@@ -31,3 +23,11 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 unnecessary_wraps = "allow"
 wildcard_imports = "allow"
+
+[dependencies]
+pretty_assertions = "1.4.1"
+scraper = "0.24.0"
+unicode-normalization = "0.1.24"
+
+[dev-dependencies]
+indoc = "2.0.5"
