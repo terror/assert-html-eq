@@ -66,42 +66,24 @@ struct Attribute<'a> {
   value: Option<Cow<'a, str>>,
 }
 
-fn normalize_nbsp(text: &str) -> Cow<'_, str> {
-  if text.contains('\u{00A0}') {
-    let mut out = String::with_capacity(text.len());
-
-    for ch in text.chars() {
-      out.push(if ch == '\u{00A0}' { ' ' } else { ch });
-    }
-
-    Cow::Owned(out)
-  } else {
-    Cow::Borrowed(text)
+fn normalize_text(text: &str, significant: bool) -> Cow<'_, str> {
+  if significant {
+    return Cow::Borrowed(text);
   }
-}
 
-fn normalize_unicode(text: &str) -> Cow<'_, str> {
-  if is_nfc(text) {
+  let unicode = if is_nfc(text) {
     Cow::Borrowed(text)
   } else {
     Cow::Owned(text.nfc().collect())
-  }
-}
+  };
 
-fn should_keep_text(stack: &[&str], text: &str) -> bool {
-  if stack
-    .iter()
-    .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag))
-  {
-    return true;
-  }
+  let collapsed = unicode
+    .split(|c: char| c.is_whitespace() || c == '\u{00A0}')
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
 
-  let unicode = normalize_unicode(text);
-
-  normalize_nbsp(unicode.as_ref())
-    .split_whitespace()
-    .next()
-    .is_some()
+  Cow::Owned(collapsed)
 }
 
 fn escape_text(input: &str) -> String {
@@ -201,7 +183,12 @@ fn write_element<'a>(
     .collect::<Vec<_>>();
 
   let has_visible_children = children.iter().any(|child| match child.value() {
-    Node::Text(text) => should_keep_text(stack, text),
+    Node::Text(text) => {
+      let significant = stack
+        .iter()
+        .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
+      !normalize_text(text, significant).is_empty()
+    }
     Node::Element(_) | Node::Doctype(_) | Node::ProcessingInstruction(_) => {
       true
     }
@@ -266,13 +253,7 @@ fn write_element<'a>(
           })
           .collect::<String>();
 
-        let joined = if significant {
-          raw
-        } else {
-          let unicode = normalize_unicode(&raw);
-          let normalized = normalize_nbsp(unicode.as_ref());
-          normalized.split_whitespace().collect::<Vec<_>>().join(" ")
-        };
+        let joined = normalize_text(&raw, significant);
 
         if !joined.is_empty() {
           if !buffer.ends_with('\n') {
