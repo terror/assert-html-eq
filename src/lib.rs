@@ -66,245 +66,258 @@ struct Attribute<'a> {
   value: Option<Cow<'a, str>>,
 }
 
-fn normalize_text(text: &str, significant: bool) -> Cow<'_, str> {
-  if significant {
-    return Cow::Borrowed(text);
-  }
-
-  let unicode = if is_nfc(text) {
-    Cow::Borrowed(text)
-  } else {
-    Cow::Owned(text.nfc().collect())
-  };
-
-  let collapsed = unicode
-    .split(|c: char| c.is_whitespace() || c == '\u{00A0}')
-    .filter(|s| !s.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ");
-
-  Cow::Owned(collapsed)
+struct Normalizer<'a> {
+  buffer: String,
+  stack: Vec<&'a str>,
 }
 
-fn escape_text(input: &str) -> String {
-  let mut escaped = String::with_capacity(input.len());
+impl<'a> Normalizer<'a> {
+  fn escape_text(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
 
-  for ch in input.chars() {
-    match ch {
-      '&' => escaped.push_str("&amp;"),
-      '<' => escaped.push_str("&lt;"),
-      '>' => escaped.push_str("&gt;"),
-      _ => escaped.push(ch),
-    }
-  }
-
-  escaped
-}
-
-fn normalize_token_set(name: &str, value: &str) -> String {
-  let lowercase = matches!(name, "part" | "rel" | "sandbox");
-
-  let mut tokens = value
-    .split_ascii_whitespace()
-    .map(|token| {
-      if lowercase {
-        token.to_ascii_lowercase()
-      } else {
-        token.to_string()
+    for ch in input.chars() {
+      match ch {
+        '&' => escaped.push_str("&amp;"),
+        '<' => escaped.push_str("&lt;"),
+        '>' => escaped.push_str("&gt;"),
+        _ => escaped.push(ch),
       }
-    })
-    .collect::<Vec<_>>();
-
-  tokens.sort_unstable();
-  tokens.dedup();
-  tokens.join(" ")
-}
-
-fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
-  let mut attrs = element
-    .value()
-    .attrs()
-    .map(|(name, value)| {
-      if TOKEN_SET_ATTRIBUTES.contains(&name) {
-        Attribute {
-          name,
-          value: Some(Cow::Owned(normalize_token_set(name, value))),
-        }
-      } else if BOOLEAN_ATTRIBUTES.contains(&name) {
-        Attribute { name, value: None }
-      } else {
-        Attribute {
-          name,
-          value: Some(Cow::Borrowed(value)),
-        }
-      }
-    })
-    .collect::<Vec<_>>();
-
-  attrs.sort_by(|a, b| a.name.cmp(b.name));
-  attrs
-}
-
-fn write_element<'a>(
-  buffer: &mut String,
-  element: &ElementRef<'a>,
-  depth: usize,
-  stack: &mut Vec<&'a str>,
-) {
-  let indent = "  ".repeat(depth);
-  let name = element.value().name();
-
-  buffer.push_str(&indent);
-  buffer.push('<');
-  buffer.push_str(name);
-
-  let attrs = normalize_attributes(element);
-
-  for Attribute { name: key, value } in attrs {
-    buffer.push(' ');
-    buffer.push_str(key);
-    if let Some(value) = value {
-      buffer.push_str("=\"");
-      buffer.push_str(&escape_text(value.as_ref()));
-      buffer.push('"');
     }
+
+    escaped
   }
 
-  stack.push(name);
+  fn normalize(html: &'a Html) -> String {
+    let mut normalizer = Normalizer {
+      buffer: String::new(),
+      stack: Vec::new(),
+    };
 
-  let children = element
-    .children()
-    .filter(|child| {
-      !matches!(
-        child.value(),
-        Node::Comment(_) | Node::Document | Node::Fragment
-      )
-    })
-    .collect::<Vec<_>>();
+    normalizer.write_element(&html.root_element(), 0);
 
-  let has_visible_children = children.iter().any(|child| match child.value() {
-    Node::Text(text) => {
-      let significant = stack
-        .iter()
-        .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
-      !normalize_text(text, significant).is_empty()
-    }
-    Node::Element(_) | Node::Doctype(_) | Node::ProcessingInstruction(_) => {
-      true
-    }
-    _ => false,
-  });
+    normalizer
+      .buffer
+      .truncate(normalizer.buffer.trim_end().len());
 
-  if !has_visible_children {
-    if VOID_ELEMENTS.contains(&name) {
-      buffer.push('>');
-      buffer.push('\n');
-    } else {
-      buffer.push_str("></");
-      buffer.push_str(name);
-      buffer.push_str(">\n");
-    }
-
-    stack.pop();
-
-    return;
+    normalizer.buffer
   }
 
-  buffer.push('>');
-
-  let child_indent = "  ".repeat(depth + 1);
-
-  let mut remaining = children.as_slice();
-
-  while let Some((child, tail)) = remaining.split_first() {
-    match child.value() {
-      Node::Element(_) => {
-        if !buffer.ends_with('\n') {
-          buffer.push('\n');
-        }
-
-        write_element(
-          buffer,
-          &ElementRef::wrap(*child).expect("child must be an element"),
-          depth + 1,
-          stack,
-        );
-
-        remaining = tail;
-      }
-      Node::Text(_) => {
-        let text_run_len = 1
-          + tail
-            .iter()
-            .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
-            .count();
-
-        let (text_run, rest) = remaining.split_at(text_run_len);
-
-        let significant = stack
-          .iter()
-          .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag));
-
-        let raw = text_run
-          .iter()
-          .filter_map(|n| match n.value() {
-            Node::Text(t) => Some(&**t),
-            _ => None,
-          })
-          .collect::<String>();
-
-        let joined = normalize_text(&raw, significant);
-
-        if !joined.is_empty() {
-          if !buffer.ends_with('\n') {
-            buffer.push('\n');
+  fn normalize_attributes(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
+    let mut attrs = element
+      .value()
+      .attrs()
+      .map(|(name, value)| {
+        if TOKEN_SET_ATTRIBUTES.contains(&name) {
+          Attribute {
+            name,
+            value: Some(Cow::Owned(Self::normalize_token_set(name, value))),
           }
-          buffer.push_str(&child_indent);
-          buffer.push_str(&escape_text(&joined));
+        } else if BOOLEAN_ATTRIBUTES.contains(&name) {
+          Attribute { name, value: None }
+        } else {
+          Attribute {
+            name,
+            value: Some(Cow::Borrowed(value)),
+          }
         }
+      })
+      .collect::<Vec<_>>();
 
-        remaining = rest;
-      }
-      Node::Doctype(doctype) => {
-        buffer.push('\n');
-        buffer.push_str(&child_indent);
-        let _ = write!(buffer, "{doctype:?}");
-        remaining = tail;
-      }
-      Node::ProcessingInstruction(pi) => {
-        buffer.push('\n');
-        buffer.push_str(&child_indent);
-        let _ = write!(buffer, "{pi:?}");
-        remaining = tail;
-      }
-      Node::Document | Node::Fragment | Node::Comment(_) => {
-        remaining = tail;
+    attrs.sort_by(|a, b| a.name.cmp(b.name));
+    attrs
+  }
+
+  fn normalize_text(text: &str, significant: bool) -> Cow<'_, str> {
+    if significant {
+      return Cow::Borrowed(text);
+    }
+
+    let unicode = if is_nfc(text) {
+      Cow::Borrowed(text)
+    } else {
+      Cow::Owned(text.nfc().collect())
+    };
+
+    let collapsed = unicode
+      .split(|c: char| c.is_whitespace() || c == '\u{00A0}')
+      .filter(|s| !s.is_empty())
+      .collect::<Vec<_>>()
+      .join(" ");
+
+    Cow::Owned(collapsed)
+  }
+
+  fn normalize_token_set(name: &str, value: &str) -> String {
+    let lowercase = matches!(name, "part" | "rel" | "sandbox");
+
+    let mut tokens = value
+      .split_ascii_whitespace()
+      .map(|token| {
+        if lowercase {
+          token.to_ascii_lowercase()
+        } else {
+          token.to_string()
+        }
+      })
+      .collect::<Vec<_>>();
+
+    tokens.sort_unstable();
+    tokens.dedup();
+    tokens.join(" ")
+  }
+
+  fn significant(&self) -> bool {
+    self
+      .stack
+      .iter()
+      .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag))
+  }
+
+  fn write_element(&mut self, element: &ElementRef<'a>, depth: usize) {
+    let indent = "  ".repeat(depth);
+
+    let name = element.value().name();
+
+    self.buffer.push_str(&indent);
+    self.buffer.push('<');
+    self.buffer.push_str(name);
+
+    for Attribute { name: key, value } in Self::normalize_attributes(element) {
+      self.buffer.push(' ');
+      self.buffer.push_str(key);
+
+      if let Some(value) = value {
+        self.buffer.push_str("=\"");
+        self.buffer.push_str(&Self::escape_text(value.as_ref()));
+        self.buffer.push('"');
       }
     }
+
+    self.stack.push(name);
+
+    let children = element
+      .children()
+      .filter(|child| {
+        !matches!(
+          child.value(),
+          Node::Comment(_) | Node::Document | Node::Fragment
+        )
+      })
+      .collect::<Vec<_>>();
+
+    let has_visible_children =
+      children.iter().any(|child| match child.value() {
+        Node::Text(text) => {
+          !Self::normalize_text(text, self.significant()).is_empty()
+        }
+        Node::Element(_)
+        | Node::Doctype(_)
+        | Node::ProcessingInstruction(_) => true,
+        _ => false,
+      });
+
+    if !has_visible_children {
+      if VOID_ELEMENTS.contains(&name) {
+        self.buffer.push('>');
+        self.buffer.push('\n');
+      } else {
+        self.buffer.push_str("></");
+        self.buffer.push_str(name);
+        self.buffer.push_str(">\n");
+      }
+
+      self.stack.pop();
+
+      return;
+    }
+
+    self.buffer.push('>');
+
+    let child_indent = "  ".repeat(depth + 1);
+
+    let mut remaining = children.as_slice();
+
+    while let Some((child, tail)) = remaining.split_first() {
+      match child.value() {
+        Node::Element(_) => {
+          if !self.buffer.ends_with('\n') {
+            self.buffer.push('\n');
+          }
+
+          self.write_element(
+            &ElementRef::wrap(*child).expect("child must be an element"),
+            depth + 1,
+          );
+
+          remaining = tail;
+        }
+        Node::Text(_) => {
+          let text_run_len = 1
+            + tail
+              .iter()
+              .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
+              .count();
+
+          let (text_run, rest) = remaining.split_at(text_run_len);
+
+          let significant = self.significant();
+
+          let raw = text_run
+            .iter()
+            .filter_map(|n| match n.value() {
+              Node::Text(t) => Some(&**t),
+              _ => None,
+            })
+            .collect::<String>();
+
+          let joined = Self::normalize_text(&raw, significant);
+
+          if !joined.is_empty() {
+            if !self.buffer.ends_with('\n') {
+              self.buffer.push('\n');
+            }
+
+            self.buffer.push_str(&child_indent);
+            self.buffer.push_str(&Self::escape_text(&joined));
+          }
+
+          remaining = rest;
+        }
+        Node::Doctype(doctype) => {
+          self.buffer.push('\n');
+          self.buffer.push_str(&child_indent);
+          let _ = write!(self.buffer, "{doctype:?}");
+          remaining = tail;
+        }
+        Node::ProcessingInstruction(pi) => {
+          self.buffer.push('\n');
+          self.buffer.push_str(&child_indent);
+          let _ = write!(self.buffer, "{pi:?}");
+          remaining = tail;
+        }
+        Node::Document | Node::Fragment | Node::Comment(_) => {
+          remaining = tail;
+        }
+      }
+    }
+
+    if !self.buffer.ends_with('\n') {
+      self.buffer.push('\n');
+    }
+
+    self.buffer.push_str(&indent);
+    self.buffer.push_str("</");
+    self.buffer.push_str(name);
+    self.buffer.push('>');
+    self.buffer.push('\n');
+
+    self.stack.pop();
   }
-
-  if !buffer.ends_with('\n') {
-    buffer.push('\n');
-  }
-  buffer.push_str(&indent);
-  buffer.push_str("</");
-  buffer.push_str(name);
-  buffer.push('>');
-  buffer.push('\n');
-
-  stack.pop();
-}
-
-fn normalize_html(html: &Html) -> String {
-  let mut buffer = String::new();
-  let mut stack = Vec::new();
-  write_element(&mut buffer, &html.root_element(), 0, &mut stack);
-  buffer.trim_end().to_string()
 }
 
 #[doc(hidden)]
 pub mod __private {
-  use {super::normalize_html, scraper::Html};
+  use {super::Normalizer, scraper::Html};
 
   pub trait IntoHtml {
     fn into_html(self) -> Html;
@@ -339,8 +352,10 @@ pub mod __private {
   }
 
   pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
-    let (actual, expected) =
-      (normalize_html(&actual), normalize_html(&expected));
+    let (actual, expected) = (
+      Normalizer::normalize(&actual),
+      Normalizer::normalize(&expected),
+    );
 
     if actual == expected {
       return;
@@ -723,7 +738,7 @@ mod tests {
        Example </title></head><body><main><h1> Hello </h1><p>Test</p></main></body></html>",
     );
 
-    let normalized = normalize_html(&html);
+    let normalized = Normalizer::normalize(&html);
 
     let expected = indoc! {r#"
       <html lang="en">
@@ -755,7 +770,7 @@ mod tests {
        6 && 7 > 6</p></body></html>",
     );
 
-    let normalized = normalize_html(&html);
+    let normalized = Normalizer::normalize(&html);
 
     let expected = indoc! {r#"
       <html>
