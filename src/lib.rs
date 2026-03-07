@@ -8,15 +8,15 @@ use {
 macro_rules! assert_html_eq {
   ($actual:expr, $expected:expr $(,)?) => {{
     $crate::__private::assert_html_eq(
-      $crate::__private::into_html($actual),
-      $crate::__private::into_html($expected),
+      &$crate::__private::into_html($actual),
+      &$crate::__private::into_html($expected),
       None
     );
   }};
   ($actual:expr, $expected:expr, $($arg:tt)+) => {{
     $crate::__private::assert_html_eq(
-      $crate::__private::into_html($actual),
-      $crate::__private::into_html($expected),
+      &$crate::__private::into_html($actual),
+      &$crate::__private::into_html($expected),
       Some(format!($($arg)+)),
     );
   }};
@@ -176,24 +176,9 @@ impl<'a> Normalizer<'a> {
   fn write_element(&mut self, element: &ElementRef<'a>, depth: usize) {
     let indent = "  ".repeat(depth);
 
+    self.write_open_tag(element, &indent);
+
     let name = element.value().name();
-
-    self.buffer.push_str(&indent);
-    self.buffer.push('<');
-    self.buffer.push_str(name);
-
-    for Attribute { name: key, value } in Self::normalize_attributes(element) {
-      self.buffer.push(' ');
-      self.buffer.push_str(key);
-
-      if let Some(value) = value {
-        self.buffer.push_str("=\"");
-        self.buffer.push_str(&Self::escape_text(value.as_ref()));
-        self.buffer.push('"');
-      }
-    }
-
-    self.stack.push(name);
 
     let children = element
       .children()
@@ -260,8 +245,6 @@ impl<'a> Normalizer<'a> {
 
           let (text_run, rest) = remaining.split_at(text_run_len);
 
-          let significant = self.significant();
-
           let raw = text_run
             .iter()
             .filter_map(|n| match n.value() {
@@ -270,16 +253,7 @@ impl<'a> Normalizer<'a> {
             })
             .collect::<String>();
 
-          let joined = Self::normalize_text(&raw, significant);
-
-          if !joined.is_empty() {
-            if !self.buffer.ends_with('\n') {
-              self.buffer.push('\n');
-            }
-
-            self.buffer.push_str(&child_indent);
-            self.buffer.push_str(&Self::escape_text(&joined));
-          }
+          self.write_text(&raw, &child_indent);
 
           remaining = rest;
         }
@@ -312,6 +286,40 @@ impl<'a> Normalizer<'a> {
     self.buffer.push('\n');
 
     self.stack.pop();
+  }
+
+  fn write_open_tag(&mut self, element: &ElementRef<'a>, indent: &str) {
+    let name = element.value().name();
+
+    self.buffer.push_str(indent);
+    self.buffer.push('<');
+    self.buffer.push_str(name);
+
+    for Attribute { name: key, value } in Self::normalize_attributes(element) {
+      self.buffer.push(' ');
+      self.buffer.push_str(key);
+
+      if let Some(value) = value {
+        self.buffer.push_str("=\"");
+        self.buffer.push_str(&Self::escape_text(value.as_ref()));
+        self.buffer.push('"');
+      }
+    }
+
+    self.stack.push(name);
+  }
+
+  fn write_text(&mut self, raw: &str, indent: &str) {
+    let joined = Self::normalize_text(raw, self.significant());
+
+    if !joined.is_empty() {
+      if !self.buffer.ends_with('\n') {
+        self.buffer.push('\n');
+      }
+
+      self.buffer.push_str(indent);
+      self.buffer.push_str(&Self::escape_text(&joined));
+    }
   }
 }
 
@@ -347,14 +355,14 @@ pub mod __private {
     }
   }
 
-  pub fn into_html<T: IntoHtml>(input: T) -> Html {
-    input.into_html()
-  }
-
-  pub fn assert_html_eq(actual: Html, expected: Html, custom: Option<String>) {
+  pub fn assert_html_eq(
+    actual: &Html,
+    expected: &Html,
+    custom: Option<String>,
+  ) {
     let (actual, expected) = (
-      Normalizer::normalize(&actual),
-      Normalizer::normalize(&expected),
+      Normalizer::normalize(actual),
+      Normalizer::normalize(expected),
     );
 
     if actual == expected {
@@ -368,11 +376,87 @@ pub mod __private {
       None => panic!("assert_html_eq! failed:\n{diff}"),
     }
   }
+
+  pub fn into_html<T: IntoHtml>(input: T) -> Html {
+    input.into_html()
+  }
 }
 
 #[cfg(test)]
 mod tests {
   use {super::*, indoc::indoc, scraper::Html};
+
+  #[test]
+  fn accepts_html_values() {
+    assert_html_eq!(
+      Html::parse_document("<p>Text</p>"),
+      Html::parse_document("<p>Text</p>")
+    );
+  }
+
+  #[test]
+  fn attribute_order_is_ignored() {
+    assert_html_eq!(
+      "<img alt=\"x\" src=\"/a.png\">",
+      "<img src=\"/a.png\" alt=\"x\">"
+    );
+  }
+
+  #[test]
+  fn attribute_quoting_style_is_ignored() {
+    assert_html_eq!(
+      "<div title=\"Tom &amp; Jerry\"></div>",
+      "<div title='Tom &amp; Jerry'></div>"
+    );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn attribute_whitespace_is_preserved_for_non_token_sets() {
+    assert_html_eq!(
+      "<div title=\"hello  world\"></div>",
+      "<div title=\"hello world\"></div>"
+    );
+  }
+
+  #[test]
+  fn boolean_attribute_forms_are_equivalent() {
+    assert_html_eq!("<input disabled>", "<input disabled=\"\">");
+    assert_html_eq!("<input disabled>", "<input disabled=disabled>");
+  }
+
+  #[test]
+  fn coalesces_adjacent_text_nodes() {
+    assert_html_eq!("<p>Hello<!-- comment --> world</p>", "<p>Hello world</p>");
+  }
+
+  #[test]
+  fn code_entities_compare_equal() {
+    assert_html_eq!(
+      "<code>&quot;test&quot; &amp; 'foo'</code>",
+      "<code>\"test\" &amp; 'foo'</code>"
+    );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn code_whitespace_matters() {
+    assert_html_eq!("<code>fn  main(){}</code>", "<code>fn main(){}</code>");
+  }
+
+  #[test]
+  fn collapses_leading_and_trailing_spaces_across_text_runs() {
+    assert_html_eq!("<p> A   B </p>", "<p>A B</p>");
+    assert_html_eq!("<p>A&nbsp;&nbsp;B</p>", "<p>A B</p>");
+  }
+
+  #[test]
+  fn comment_boundaries_between_text_runs_not_significant() {
+    assert_html_eq!(
+      "<p>Hello<!--a--> \n <!--b-->world</p>",
+      "<p>Hello world</p>"
+    );
+  }
 
   #[test]
   fn compares_html_strings() {
@@ -387,11 +471,79 @@ mod tests {
   }
 
   #[test]
-  fn accepts_html_values() {
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn different_child_order_is_detected() {
     assert_html_eq!(
-      Html::parse_document("<p>Text</p>"),
-      Html::parse_document("<p>Text</p>")
+      "<ul><li>1</li><li>2</li></ul>",
+      "<ul><li>2</li><li>1</li></ul>"
     );
+  }
+
+  #[test]
+  fn doctype_is_ignored_for_semantics() {
+    assert_html_eq!("<!doctype html><div>ok</div>", "<div>ok</div>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn does_not_normalize_unicode_in_significant_whitespace() {
+    assert_html_eq!("<pre>Café</pre>", "<pre>Cafe\u{0301}</pre>");
+  }
+
+  #[test]
+  fn drops_whitespace_only_children_in_nonsignificant_contexts() {
+    assert_html_eq!("<div>   \n\t  </div>", "<div></div>");
+  }
+
+  #[test]
+  fn duplicate_attributes_collapse_to_parser_behavior() {
+    assert_html_eq!("<img alt=\"a\" alt=\"b\">", "<img alt=\"a\">");
+  }
+
+  #[test]
+  fn duplicate_tokens_in_token_set_attrs_are_deduped() {
+    assert_html_eq!(
+      "<link rel=\"preload preload stylesheet\">",
+      "<link rel=\"stylesheet preload\">"
+    );
+
+    assert_html_eq!(
+      "<iframe sandbox=\"allow-scripts allow-scripts allow-same-origin\">",
+      "<iframe sandbox=\"allow-same-origin allow-scripts\">"
+    );
+
+    assert_html_eq!("<div class=\"a  a   b\">", "<div class=\"a b\">");
+  }
+
+  #[test]
+  fn entities_in_text_and_attrs_compare_equal() {
+    assert_html_eq!(
+      "<p>5 &lt; 6 &amp;&amp; 7 &gt; 6</p>",
+      "<p>5 < 6 && 7 > 6</p>"
+    );
+
+    assert_html_eq!(
+      "<a href=\"/?a=1&amp;b=2\">x</a>",
+      "<a href='/?a=1&b=2'>x</a>"
+    );
+  }
+
+  #[test]
+  fn html_case_insensitivity_normalizes() {
+    assert_html_eq!("<DIV CLASS=\"B A\"></DIV>", "<div class=\"A B\"></div>");
+  }
+
+  #[test]
+  fn ignores_comments() {
+    assert_html_eq!(
+      "<div><!-- noisy --><span>Text</span></div>",
+      "<div><span>Text</span></div>"
+    );
+  }
+
+  #[test]
+  fn leading_trailing_whitespace_inside_block_is_ignored() {
+    assert_html_eq!("<div>\n   hello  \n</div>", "<div>hello</div>");
   }
 
   #[test]
@@ -401,10 +553,101 @@ mod tests {
   }
 
   #[test]
-  fn ignores_comments() {
+  fn mixed_adjacent_text_and_nodes_are_coalesced_correctly() {
+    assert_html_eq!("<p>a<!--x-->  b<!--y-->   c</p>", "<p>a b c</p>");
+  }
+
+  #[test]
+  fn mixed_text_runs_around_inline_elements() {
+    assert_html_eq!("<p> A <em>  B  </em>  C </p>", "<p>A <em>B</em> C</p>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn nbsp_differs_from_space_in_significant_contexts() {
+    assert_html_eq!("<pre>A\u{00A0}B</pre>", "<pre>A B</pre>");
+  }
+
+  #[test]
+  fn nbsp_entity_and_char_are_equivalent_outside_significant_contexts() {
+    assert_html_eq!("<p>A&nbsp;B</p>", "<p>A\u{00A0}B</p>");
+  }
+
+  #[test]
+  fn nested_structure_with_whitespace_noise() {
     assert_html_eq!(
-      "<div><!-- noisy --><span>Text</span></div>",
-      "<div><span>Text</span></div>"
+      "<div>\n  <ul>\n    <li> 1 </li>\n    <li>  2</li>\n  </ul>\n</div>",
+      "<div><ul><li>1</li><li>2</li></ul></div>"
+    );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn non_boolean_enumerated_attrs_are_not_collapsed() {
+    assert_html_eq!("<div contenteditable=\"false\"></div>", "<div></div>");
+  }
+
+  #[test]
+  fn normalize_html_escapes_text_content() {
+    let html = Html::parse_document(
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><p>5 < \
+       6 && 7 > 6</p></body></html>",
+    );
+
+    let normalized = Normalizer::normalize(&html);
+
+    let expected = indoc! {r#"
+      <html>
+        <head>
+          <meta charset="utf-8">
+        </head>
+        <body>
+          <p>
+            5 &lt; 6 &amp;&amp; 7 &gt; 6
+          </p>
+        </body>
+      </html>"#};
+
+    assert_eq!(normalized, expected);
+  }
+
+  #[test]
+  fn normalize_html_reconstructs_document_structure() {
+    let html = Html::parse_document(
+      "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title> \
+       Example </title></head><body><main><h1> Hello </h1><p>Test</p></main></body></html>",
+    );
+
+    let normalized = Normalizer::normalize(&html);
+
+    let expected = indoc! {r#"
+      <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <title>
+            Example
+          </title>
+        </head>
+        <body>
+          <main>
+            <h1>
+              Hello
+            </h1>
+            <p>
+              Test
+            </p>
+          </main>
+        </body>
+      </html>"#};
+
+    assert_eq!(normalized, expected);
+  }
+
+  #[test]
+  fn normalizes_boolean_attributes() {
+    assert_html_eq!(
+      "<input type=\"checkbox\" disabled=\"disabled\" checked=\"\" />",
+      "<input type=\"checkbox\" disabled checked>"
     );
   }
 
@@ -417,62 +660,8 @@ mod tests {
   }
 
   #[test]
-  fn normalizes_boolean_attributes() {
-    assert_html_eq!(
-      "<input type=\"checkbox\" disabled=\"disabled\" checked=\"\" />",
-      "<input type=\"checkbox\" disabled checked>"
-    );
-  }
-
-  #[test]
   fn normalizes_nbsp_as_space() {
     assert_html_eq!("<p>A&nbsp;B</p>", "<p>A B</p>");
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn preserves_pre_whitespace() {
-    assert_html_eq!(
-      "<pre>line  with  spaces</pre>",
-      "<pre>line with spaces</pre>"
-    );
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn preserves_script_whitespace() {
-    assert_html_eq!(
-      "<script>if (x) {\n  doThing();\n}</script>",
-      "<script>if (x) { doThing(); }</script>"
-    );
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn preserves_textarea_whitespace() {
-    assert_html_eq!(
-      "<textarea>line  with  spaces</textarea>",
-      "<textarea>line with spaces</textarea>"
-    );
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn preserves_style_whitespace() {
-    assert_html_eq!(
-      "<style>body {\n  color: red;\n}</style>",
-      "<style>body { color: red; }</style>"
-    );
-  }
-
-  #[test]
-  fn treats_void_end_tags_equivalently() {
-    assert_html_eq!("<input disabled>", "<input disabled></input>");
-  }
-
-  #[test]
-  fn coalesces_adjacent_text_nodes() {
-    assert_html_eq!("<p>Hello<!-- comment --> world</p>", "<p>Hello world</p>");
   }
 
   #[test]
@@ -510,201 +699,19 @@ mod tests {
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
-  fn does_not_normalize_unicode_in_significant_whitespace() {
-    assert_html_eq!("<pre>Café</pre>", "<pre>Cafe\u{0301}</pre>");
-  }
-
-  #[test]
-  fn entities_in_text_and_attrs_compare_equal() {
+  fn preserves_pre_whitespace() {
     assert_html_eq!(
-      "<p>5 &lt; 6 &amp;&amp; 7 &gt; 6</p>",
-      "<p>5 < 6 && 7 > 6</p>"
-    );
-
-    assert_html_eq!(
-      "<a href=\"/?a=1&amp;b=2\">x</a>",
-      "<a href='/?a=1&b=2'>x</a>"
-    );
-  }
-
-  #[test]
-  fn unusual_whitespace_chars_collapse() {
-    assert_html_eq!("<p>A\u{2009}\u{2003}B</p>", "<p>A B</p>");
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn nbsp_differs_from_space_in_significant_contexts() {
-    assert_html_eq!("<pre>A\u{00A0}B</pre>", "<pre>A B</pre>");
-  }
-
-  #[test]
-  fn nbsp_entity_and_char_are_equivalent_outside_significant_contexts() {
-    assert_html_eq!("<p>A&nbsp;B</p>", "<p>A\u{00A0}B</p>");
-  }
-
-  #[test]
-  fn whitespace_around_comments_in_significant_contexts_isnt_invented() {
-    assert_html_eq!("<pre>foo<!--x-->bar</pre>", "<pre>foobar</pre>");
-  }
-
-  #[test]
-  fn drops_whitespace_only_children_in_nonsignificant_contexts() {
-    assert_html_eq!("<div>   \n\t  </div>", "<div></div>");
-  }
-
-  #[test]
-  fn leading_trailing_whitespace_inside_block_is_ignored() {
-    assert_html_eq!("<div>\n   hello  \n</div>", "<div>hello</div>");
-  }
-
-  #[test]
-  fn collapses_leading_and_trailing_spaces_across_text_runs() {
-    assert_html_eq!("<p> A   B </p>", "<p>A B</p>");
-    assert_html_eq!("<p>A&nbsp;&nbsp;B</p>", "<p>A B</p>");
-  }
-
-  #[test]
-  fn mixed_text_runs_around_inline_elements() {
-    assert_html_eq!("<p> A <em>  B  </em>  C </p>", "<p>A <em>B</em> C</p>");
-  }
-
-  #[test]
-  fn spacing_around_inline_elements_is_semantic() {
-    assert_html_eq!("<p>a <em>b</em> c</p>", "<p>a <em>b</em> c</p>");
-    assert_html_eq!("<p>a<em>b</em>c</p>", "<p>a<em>b</em>c</p>");
-  }
-
-  #[test]
-  fn attribute_order_is_ignored() {
-    assert_html_eq!(
-      "<img alt=\"x\" src=\"/a.png\">",
-      "<img src=\"/a.png\" alt=\"x\">"
-    );
-  }
-
-  #[test]
-  fn attribute_quoting_style_is_ignored() {
-    assert_html_eq!(
-      "<div title=\"Tom &amp; Jerry\"></div>",
-      "<div title='Tom &amp; Jerry'></div>"
-    );
-  }
-
-  #[test]
-  fn self_closing_non_void_normalizes() {
-    assert_html_eq!("<div/>", "<div></div>");
-  }
-
-  #[test]
-  fn void_element_syntax_variants_are_equivalent() {
-    assert_html_eq!("<br>", "<br/>");
-    assert_html_eq!("<img src=x>", "<img src=\"x\"/>");
-  }
-
-  #[test]
-  fn duplicate_tokens_in_token_set_attrs_are_deduped() {
-    assert_html_eq!(
-      "<link rel=\"preload preload stylesheet\">",
-      "<link rel=\"stylesheet preload\">"
-    );
-
-    assert_html_eq!(
-      "<iframe sandbox=\"allow-scripts allow-scripts allow-same-origin\">",
-      "<iframe sandbox=\"allow-same-origin allow-scripts\">"
-    );
-
-    assert_html_eq!("<div class=\"a  a   b\">", "<div class=\"a b\">");
-  }
-
-  #[test]
-  fn boolean_attribute_forms_are_equivalent() {
-    assert_html_eq!("<input disabled>", "<input disabled=\"\">");
-    assert_html_eq!("<input disabled>", "<input disabled=disabled>");
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn non_boolean_enumerated_attrs_are_not_collapsed() {
-    assert_html_eq!("<div contenteditable=\"false\"></div>", "<div></div>");
-  }
-
-  #[test]
-  fn html_case_insensitivity_normalizes() {
-    assert_html_eq!("<DIV CLASS=\"B A\"></DIV>", "<div class=\"A B\"></div>");
-  }
-
-  #[test]
-  fn doctype_is_ignored_for_semantics() {
-    assert_html_eq!("<!doctype html><div>ok</div>", "<div>ok</div>");
-  }
-
-  #[test]
-  fn template_content_is_compared_if_supported() {
-    assert_html_eq!(
-      "<template><span> A   B </span></template>",
-      "<template><span>A B</span></template>"
+      "<pre>line  with  spaces</pre>",
+      "<pre>line with spaces</pre>"
     );
   }
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
-  fn unicode_normalization_isnt_applied_in_significant_contexts() {
+  fn preserves_script_whitespace() {
     assert_html_eq!(
-      "<script>const name = 'Cafe\u{0301}';</script>",
-      "<script>const name = 'Café';</script>"
-    );
-  }
-
-  #[test]
-  fn mixed_adjacent_text_and_nodes_are_coalesced_correctly() {
-    assert_html_eq!("<p>a<!--x-->  b<!--y-->   c</p>", "<p>a b c</p>");
-  }
-
-  #[test]
-  fn nested_structure_with_whitespace_noise() {
-    assert_html_eq!(
-      "<div>\n  <ul>\n    <li> 1 </li>\n    <li>  2</li>\n  </ul>\n</div>",
-      "<div><ul><li>1</li><li>2</li></ul></div>"
-    );
-  }
-
-  #[test]
-  fn comment_boundaries_between_text_runs_not_significant() {
-    assert_html_eq!(
-      "<p>Hello<!--a--> \n <!--b-->world</p>",
-      "<p>Hello world</p>"
-    );
-  }
-
-  #[test]
-  fn whitespace_only_text_runs_between_elements_are_ignored() {
-    assert_html_eq!(
-      "<div>a</div>\n   \t  <div>b</div>",
-      "<div>a</div><div>b</div>"
-    );
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn code_whitespace_matters() {
-    assert_html_eq!("<code>fn  main(){}</code>", "<code>fn main(){}</code>");
-  }
-
-  #[test]
-  fn code_entities_compare_equal() {
-    assert_html_eq!(
-      "<code>&quot;test&quot; &amp; 'foo'</code>",
-      "<code>\"test\" &amp; 'foo'</code>"
-    );
-  }
-
-  #[test]
-  #[should_panic(expected = "assert_html_eq! failed")]
-  fn different_child_order_is_detected() {
-    assert_html_eq!(
-      "<ul><li>1</li><li>2</li></ul>",
-      "<ul><li>2</li><li>1</li></ul>"
+      "<script>if (x) {\n  doThing();\n}</script>",
+      "<script>if (x) { doThing(); }</script>"
     );
   }
 
@@ -719,71 +726,76 @@ mod tests {
 
   #[test]
   #[should_panic(expected = "assert_html_eq! failed")]
-  fn attribute_whitespace_is_preserved_for_non_token_sets() {
+  fn preserves_style_whitespace() {
     assert_html_eq!(
-      "<div title=\"hello  world\"></div>",
-      "<div title=\"hello world\"></div>"
+      "<style>body {\n  color: red;\n}</style>",
+      "<style>body { color: red; }</style>"
     );
   }
 
   #[test]
-  fn duplicate_attributes_collapse_to_parser_behavior() {
-    assert_html_eq!("<img alt=\"a\" alt=\"b\">", "<img alt=\"a\">");
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn preserves_textarea_whitespace() {
+    assert_html_eq!(
+      "<textarea>line  with  spaces</textarea>",
+      "<textarea>line with spaces</textarea>"
+    );
   }
 
   #[test]
-  fn normalize_html_reconstructs_document_structure() {
-    let html = Html::parse_document(
-      "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title> \
-       Example </title></head><body><main><h1> Hello </h1><p>Test</p></main></body></html>",
-    );
-
-    let normalized = Normalizer::normalize(&html);
-
-    let expected = indoc! {r#"
-      <html lang="en">
-        <head>
-          <meta charset="utf-8">
-          <title>
-            Example
-          </title>
-        </head>
-        <body>
-          <main>
-            <h1>
-              Hello
-            </h1>
-            <p>
-              Test
-            </p>
-          </main>
-        </body>
-      </html>"#};
-
-    assert_eq!(normalized, expected);
+  fn self_closing_non_void_normalizes() {
+    assert_html_eq!("<div/>", "<div></div>");
   }
 
   #[test]
-  fn normalize_html_escapes_text_content() {
-    let html = Html::parse_document(
-      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><p>5 < \
-       6 && 7 > 6</p></body></html>",
+  fn spacing_around_inline_elements_is_semantic() {
+    assert_html_eq!("<p>a <em>b</em> c</p>", "<p>a <em>b</em> c</p>");
+    assert_html_eq!("<p>a<em>b</em>c</p>", "<p>a<em>b</em>c</p>");
+  }
+
+  #[test]
+  fn template_content_is_compared_if_supported() {
+    assert_html_eq!(
+      "<template><span> A   B </span></template>",
+      "<template><span>A B</span></template>"
     );
+  }
 
-    let normalized = Normalizer::normalize(&html);
+  #[test]
+  fn treats_void_end_tags_equivalently() {
+    assert_html_eq!("<input disabled>", "<input disabled></input>");
+  }
 
-    let expected = indoc! {r#"
-      <html>
-        <head>
-          <meta charset="utf-8">
-        </head>
-        <body>
-          <p>
-            5 &lt; 6 &amp;&amp; 7 &gt; 6
-          </p>
-        </body>
-      </html>"#};
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn unicode_normalization_isnt_applied_in_significant_contexts() {
+    assert_html_eq!(
+      "<script>const name = 'Cafe\u{0301}';</script>",
+      "<script>const name = 'Café';</script>"
+    );
+  }
 
-    assert_eq!(normalized, expected);
+  #[test]
+  fn unusual_whitespace_chars_collapse() {
+    assert_html_eq!("<p>A\u{2009}\u{2003}B</p>", "<p>A B</p>");
+  }
+
+  #[test]
+  fn void_element_syntax_variants_are_equivalent() {
+    assert_html_eq!("<br>", "<br/>");
+    assert_html_eq!("<img src=x>", "<img src=\"x\"/>");
+  }
+
+  #[test]
+  fn whitespace_around_comments_in_significant_contexts_isnt_invented() {
+    assert_html_eq!("<pre>foo<!--x-->bar</pre>", "<pre>foobar</pre>");
+  }
+
+  #[test]
+  fn whitespace_only_text_runs_between_elements_are_ignored() {
+    assert_html_eq!(
+      "<div>a</div>\n   \t  <div>b</div>",
+      "<div>a</div><div>b</div>"
+    );
   }
 }
