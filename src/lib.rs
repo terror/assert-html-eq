@@ -1,5 +1,4 @@
 use {
-  ego_tree::NodeRef,
   scraper::{ElementRef, Html, Node},
   std::{borrow::Cow, fmt::Write},
   unicode_normalization::{UnicodeNormalization, is_nfc},
@@ -199,7 +198,7 @@ fn write_element<'a>(
         Node::Comment(_) | Node::Document | Node::Fragment
       )
     })
-    .collect::<Vec<NodeRef<'a, Node>>>();
+    .collect::<Vec<_>>();
 
   let has_visible_children = children.iter().any(|child| match child.value() {
     Node::Text(text) => should_keep_text(stack, text),

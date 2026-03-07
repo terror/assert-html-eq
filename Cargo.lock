@@ -6,7 +6,6 @@ version = 4
 name = "assert-html-eq"
 version = "0.1.0"
 dependencies = [
- "ego-tree",
  "indoc",
  "pretty_assertions",
  "scraper",
