@@ -334,12 +334,6 @@ pub mod __private {
     }
   }
 
-  impl IntoHtml for &String {
-    fn into_html(self) -> Html {
-      Html::parse_document(self)
-    }
-  }
-
   pub fn into_html<T: IntoHtml>(input: T) -> Html {
     input.into_html()
   }
