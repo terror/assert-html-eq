@@ -8,7 +8,7 @@ unreachable_pub = "deny"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
-arbitrary-source-item-ordering = "deny"
+arbitrary_source_item_ordering = "deny"
 pedantic = { level = "deny", priority = -1 }
 wildcard_imports = "allow"
 
