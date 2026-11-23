@@ -72,6 +72,10 @@ struct Normalizer<'a> {
 }
 
 impl<'a> Normalizer<'a> {
+  fn escape_attribute(input: &str) -> String {
+    Self::escape_text(input).replace('"', "&quot;")
+  }
+
   fn escape_text(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
 
@@ -301,7 +305,9 @@ impl<'a> Normalizer<'a> {
 
       if let Some(value) = value {
         self.buffer.push_str("=\"");
-        self.buffer.push_str(&Self::escape_text(value.as_ref()));
+        self
+          .buffer
+          .push_str(&Self::escape_attribute(value.as_ref()));
         self.buffer.push('"');
       }
     }
@@ -400,6 +406,12 @@ mod tests {
       "<img alt=\"x\" src=\"/a.png\">",
       "<img src=\"/a.png\" alt=\"x\">"
     );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn attribute_quotes_are_escaped() {
+    assert_html_eq!("<div a='x\" b=\"y'></div>", "<div a=\"x\" b=\"y\"></div>");
   }
 
   #[test]
