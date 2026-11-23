@@ -51,6 +51,14 @@ const BOOLEAN_ATTRIBUTES: &[&str] = &[
   "truespeed",
 ];
 
+const INLINE_ELEMENTS: &[&str] = &[
+  "a", "abbr", "b", "bdi", "bdo", "cite", "code", "data", "del", "dfn", "em",
+  "i", "img", "ins", "kbd", "label", "mark", "q", "s", "samp", "small", "span",
+  "strong", "sub", "sup", "time", "u", "var",
+];
+
+const SPACE_MARKER: &str = "\u{2423}";
+
 const TOKEN_SET_ATTRIBUTES: &[&str] = &["class", "part", "rel", "sandbox"];
 
 const VOID_ELEMENTS: &[&str] = &[
@@ -89,6 +97,10 @@ impl<'a> Normalizer<'a> {
     }
 
     escaped
+  }
+
+  fn is_inline(node: &Node) -> bool {
+    matches!(node, Node::Element(element) if INLINE_ELEMENTS.contains(&element.name()))
   }
 
   fn normalize(html: &'a Html) -> String {
@@ -206,17 +218,7 @@ impl<'a> Normalizer<'a> {
       });
 
     if !has_visible_children {
-      if VOID_ELEMENTS.contains(&name) {
-        self.buffer.push('>');
-        self.buffer.push('\n');
-      } else {
-        self.buffer.push_str("></");
-        self.buffer.push_str(name);
-        self.buffer.push_str(">\n");
-      }
-
-      self.stack.pop();
-
+      self.write_empty_element_end(name);
       return;
     }
 
@@ -247,6 +249,8 @@ impl<'a> Normalizer<'a> {
               .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
               .count();
 
+          let start = children.len() - remaining.len();
+
           let (text_run, rest) = remaining.split_at(text_run_len);
 
           let raw = text_run
@@ -257,7 +261,15 @@ impl<'a> Normalizer<'a> {
             })
             .collect::<String>();
 
-          self.write_text(&raw, &child_indent);
+          let previous = start.checked_sub(1).and_then(|i| children.get(i));
+          let next = children.get(start + text_run_len);
+
+          self.write_text(
+            &raw,
+            &child_indent,
+            previous.is_some_and(|node| Self::is_inline(node.value())),
+            next.is_some_and(|node| Self::is_inline(node.value())),
+          );
 
           remaining = rest;
         }
@@ -292,6 +304,18 @@ impl<'a> Normalizer<'a> {
     self.stack.pop();
   }
 
+  fn write_empty_element_end(&mut self, name: &str) {
+    if VOID_ELEMENTS.contains(&name) {
+      self.buffer.push_str(">\n");
+    } else {
+      self.buffer.push_str("></");
+      self.buffer.push_str(name);
+      self.buffer.push_str(">\n");
+    }
+
+    self.stack.pop();
+  }
+
   fn write_open_tag(&mut self, element: &ElementRef<'a>, indent: &str) {
     let name = element.value().name();
 
@@ -315,8 +339,36 @@ impl<'a> Normalizer<'a> {
     self.stack.push(name);
   }
 
-  fn write_text(&mut self, raw: &str, indent: &str) {
-    let joined = Self::normalize_text(raw, self.significant());
+  fn write_text(
+    &mut self,
+    raw: &str,
+    indent: &str,
+    after_inline: bool,
+    before_inline: bool,
+  ) {
+    let leading_space = after_inline && raw.starts_with(char::is_whitespace);
+
+    let trailing_space = before_inline && raw.ends_with(char::is_whitespace);
+
+    let significant = self.significant();
+
+    let joined = Self::normalize_text(raw, significant);
+
+    let joined = if significant {
+      joined
+    } else if joined.is_empty() {
+      if leading_space && trailing_space {
+        Cow::Borrowed(SPACE_MARKER)
+      } else {
+        joined
+      }
+    } else {
+      Cow::Owned(format!(
+        "{}{joined}{}",
+        if leading_space { SPACE_MARKER } else { "" },
+        if trailing_space { SPACE_MARKER } else { "" },
+      ))
+    };
 
     if !joined.is_empty() {
       if !self.buffer.ends_with('\n') {
@@ -550,6 +602,29 @@ mod tests {
     assert_html_eq!(
       "<div><!-- noisy --><span>Text</span></div>",
       "<div><span>Text</span></div>"
+    );
+  }
+
+  #[test]
+  fn inline_element_spacing_amount_is_ignored() {
+    assert_html_eq!(
+      "<p>foo \n  <b>bar</b>\n baz</p>",
+      "<p>foo <b>bar</b> baz</p>"
+    );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn inline_element_spacing_matters() {
+    assert_html_eq!("<p>foo<b>bar</b></p>", "<p>foo <b>bar</b></p>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn inter_inline_whitespace_matters() {
+    assert_html_eq!(
+      "<p><b>foo</b><i>bar</i></p>",
+      "<p><b>foo</b> <i>bar</i></p>"
     );
   }
 
