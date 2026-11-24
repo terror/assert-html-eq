@@ -59,10 +59,75 @@ const BOOLEAN_ATTRIBUTES: &[&str] = &[
   "truespeed",
 ];
 
-const INLINE_ELEMENTS: &[&str] = &[
-  "a", "abbr", "b", "bdi", "bdo", "cite", "code", "data", "del", "dfn", "em",
-  "i", "img", "ins", "kbd", "label", "mark", "q", "s", "samp", "small", "span",
-  "strong", "sub", "sup", "time", "u", "var",
+const DISPLAY_BLOCK_ELEMENTS: &[&str] = &[
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "br",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hgroup",
+  "hr",
+  "html",
+  "legend",
+  "li",
+  "listing",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "plaintext",
+  "pre",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+  "xmp",
+];
+
+const DISPLAY_INLINE_BLOCK_ELEMENTS: &[&str] = &[
+  "audio", "button", "canvas", "embed", "iframe", "img", "input", "math",
+  "meter", "object", "progress", "select", "svg", "textarea", "video",
+];
+
+const DISPLAY_NONE_ELEMENTS: &[&str] = &[
+  "area", "base", "datalist", "link", "meta", "noscript", "param", "rp",
+  "script", "source", "style", "template", "title", "track", "wbr",
 ];
 
 const SPACE_MARKER: &str = "\u{2423}";
@@ -84,6 +149,14 @@ const WHITESPACE_SIGNIFICANT_ELEMENTS: &[&str] = &[
   "textarea",
   "xmp",
 ];
+
+enum Token<'a> {
+  Close(&'a str),
+  Element(ElementRef<'a>),
+  Open(ElementRef<'a>),
+  Space,
+  Text(String),
+}
 
 struct Attribute<'a> {
   name: Cow<'a, str>,
@@ -108,6 +181,7 @@ impl Normalizer {
         '&' => escaped.push_str("&amp;"),
         '<' => escaped.push_str("&lt;"),
         '>' => escaped.push_str("&gt;"),
+        '\u{2423}' => escaped.push_str("&#x2423;"),
         _ => escaped.push(ch),
       }
     }
@@ -115,8 +189,78 @@ impl Normalizer {
     escaped
   }
 
-  fn is_inline(node: &Node) -> bool {
-    matches!(node, Node::Element(element) if INLINE_ELEMENTS.contains(&element.name()))
+  fn flush_boundary<'a>(
+    tokens: &mut Vec<Token<'a>>,
+    boundary: &mut Vec<Token<'a>>,
+    space: bool,
+  ) {
+    if space {
+      let mut depth = 0isize;
+      let mut lowest = 0;
+      let mut position = 0;
+
+      for (index, token) in boundary.iter().enumerate() {
+        match token {
+          Token::Open(_) => depth += 1,
+          Token::Close(_) => depth -= 1,
+          _ => {}
+        }
+
+        if depth < lowest {
+          lowest = depth;
+          position = index + 1;
+        }
+      }
+
+      boundary.insert(position, Token::Space);
+    }
+
+    tokens.append(boundary);
+  }
+
+  fn inline_tokens<'a>(element: &ElementRef<'a>) -> Vec<Token<'a>> {
+    let mut tokens = Vec::new();
+
+    let mut stack = vec![(None, element.children())];
+
+    while let Some((name, children)) = stack.last_mut() {
+      let Some(child) = children.next() else {
+        if let Some(name) = *name {
+          tokens.push(Token::Close(name));
+        }
+
+        stack.pop();
+
+        continue;
+      };
+
+      if let Some(element) = ElementRef::wrap(child) {
+        let name = element.value().name();
+
+        if Self::is_transparent(name) {
+          tokens.push(Token::Open(element));
+          stack.push((Some(name), child.children()));
+        } else {
+          tokens.push(Token::Element(element));
+        }
+      } else if let Node::Text(text) = child.value() {
+        Self::push_text_tokens(text, &mut tokens);
+      }
+    }
+
+    tokens
+  }
+
+  fn is_transparent(name: &str) -> bool {
+    [
+      DISPLAY_BLOCK_ELEMENTS,
+      DISPLAY_INLINE_BLOCK_ELEMENTS,
+      DISPLAY_NONE_ELEMENTS,
+      VOID_ELEMENTS,
+      WHITESPACE_SIGNIFICANT_ELEMENTS,
+    ]
+    .iter()
+    .all(|elements| !elements.contains(&name))
   }
 
   fn normalize(html: &Html) -> String {
@@ -175,26 +319,6 @@ impl Normalizer {
     attrs
   }
 
-  fn normalize_text(text: &str, significant: bool) -> Cow<'_, str> {
-    if significant {
-      return Cow::Borrowed(text);
-    }
-
-    let unicode = if is_nfc(text) {
-      Cow::Borrowed(text)
-    } else {
-      Cow::Owned(text.nfc().collect())
-    };
-
-    let collapsed = unicode
-      .split(char::is_whitespace)
-      .filter(|s| !s.is_empty())
-      .collect::<Vec<_>>()
-      .join(" ");
-
-    Cow::Owned(collapsed)
-  }
-
   fn normalize_token_set(name: &str, value: &str) -> String {
     let lowercase = matches!(name, "rel" | "sandbox");
 
@@ -212,6 +336,77 @@ impl Normalizer {
     tokens.sort_unstable();
     tokens.dedup();
     tokens.join(" ")
+  }
+
+  fn normalize_whitespace(tokens: Vec<Token<'_>>) -> Vec<Token<'_>> {
+    let mut normalized = Vec::new();
+
+    let mut boundary = Vec::new();
+
+    let mut space = false;
+
+    let mut inline = false;
+
+    for token in tokens {
+      match &token {
+        Token::Space => space = true,
+        Token::Close(_) | Token::Open(_) => boundary.push(token),
+        Token::Element(element)
+          if DISPLAY_NONE_ELEMENTS.contains(&element.value().name()) =>
+        {
+          boundary.push(token);
+        }
+        Token::Element(element)
+          if DISPLAY_BLOCK_ELEMENTS.contains(&element.value().name()) =>
+        {
+          Self::flush_boundary(&mut normalized, &mut boundary, false);
+          normalized.push(token);
+          inline = false;
+          space = false;
+        }
+        Token::Element(_) | Token::Text(_) => {
+          Self::flush_boundary(&mut normalized, &mut boundary, space && inline);
+          normalized.push(token);
+          inline = true;
+          space = false;
+        }
+      }
+    }
+
+    Self::flush_boundary(&mut normalized, &mut boundary, false);
+
+    normalized
+  }
+
+  fn push_text_tokens(text: &str, tokens: &mut Vec<Token<'_>>) {
+    let text = if is_nfc(text) {
+      Cow::Borrowed(text)
+    } else {
+      Cow::Owned(text.nfc().collect::<String>())
+    };
+
+    for (index, word) in text.split(char::is_whitespace).enumerate() {
+      if index > 0 {
+        tokens.push(Token::Space);
+      }
+
+      if !word.is_empty() {
+        tokens.push(Token::Text(word.to_owned()));
+      }
+    }
+  }
+
+  fn raw_tokens<'a>(element: &ElementRef<'a>) -> Vec<Token<'a>> {
+    element
+      .children()
+      .filter_map(|child| match child.value() {
+        Node::Text(text) if !text.is_empty() => {
+          Some(Token::Text(text.to_string()))
+        }
+        Node::Element(_) => ElementRef::wrap(child).map(Token::Element),
+        _ => None,
+      })
+      .collect()
   }
 
   fn significant(&self) -> bool {
@@ -237,70 +432,20 @@ impl Normalizer {
 
     let name = element.value().name();
 
-    let children = element
-      .children()
-      .filter(|child| matches!(child.value(), Node::Element(_) | Node::Text(_)))
-      .collect::<Vec<_>>();
+    let tokens = if self.significant() {
+      Self::raw_tokens(element)
+    } else {
+      Self::normalize_whitespace(Self::inline_tokens(element))
+    };
 
-    let significant = self.significant();
-
-    let has_visible_children =
-      children.iter().any(|child| match child.value() {
-        Node::Text(text) => {
-          significant || text.chars().any(|c| !c.is_whitespace())
-        }
-        _ => true,
-      });
-
-    if !has_visible_children {
+    if tokens.is_empty() {
       self.write_empty_element_end(name);
       return;
     }
 
     self.buffer.push_str(">\n");
 
-    let child_indent = "  ".repeat(depth + 1);
-
-    let mut remaining = children.as_slice();
-
-    while let Some((child, tail)) = remaining.split_first() {
-      if let Some(element) = ElementRef::wrap(*child) {
-        self.write_element(&element, depth + 1);
-
-        remaining = tail;
-      } else {
-        let text_run_len = 1
-          + tail
-            .iter()
-            .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
-            .count();
-
-        let start = children.len() - remaining.len();
-
-        let (text_run, rest) = remaining.split_at(text_run_len);
-
-        let raw = text_run
-          .iter()
-          .filter_map(|n| match n.value() {
-            Node::Text(t) => Some(&**t),
-            _ => None,
-          })
-          .collect::<String>();
-
-        let previous = start.checked_sub(1).and_then(|i| children.get(i));
-        let next = children.get(start + text_run_len);
-
-        self.write_text(
-          &raw,
-          &child_indent,
-          name,
-          previous.is_some_and(|node| Self::is_inline(node.value())),
-          next.is_some_and(|node| Self::is_inline(node.value())),
-        );
-
-        remaining = rest;
-      }
-    }
+    self.write_tokens(&tokens, depth + 1, matches!(name, "script" | "style"));
 
     self.buffer.push_str(&indent);
     self.buffer.push_str("</");
@@ -340,48 +485,66 @@ impl Normalizer {
     }
   }
 
-  fn write_text(
-    &mut self,
-    raw: &str,
-    indent: &str,
-    parent: &str,
-    after_inline: bool,
-    before_inline: bool,
-  ) {
-    let leading_space = after_inline && raw.starts_with(char::is_whitespace);
+  fn write_text(&mut self, run: &[Token], indent: &str, raw: bool) {
+    self.buffer.push_str(indent);
 
-    let trailing_space = before_inline && raw.ends_with(char::is_whitespace);
-
-    let significant = self.significant();
-
-    let joined = Self::normalize_text(raw, significant);
-
-    let joined = if significant {
-      joined
-    } else if joined.is_empty() {
-      if leading_space && trailing_space {
-        Cow::Borrowed(SPACE_MARKER)
-      } else {
-        joined
+    for (index, token) in run.iter().enumerate() {
+      match token {
+        Token::Space if index == 0 || index == run.len() - 1 => {
+          self.buffer.push_str(SPACE_MARKER);
+        }
+        Token::Space => self.buffer.push(' '),
+        Token::Text(text) if raw => self.buffer.push_str(text),
+        Token::Text(text) => self.buffer.push_str(&Self::escape_text(text)),
+        Token::Close(_) | Token::Element(_) | Token::Open(_) => {}
       }
-    } else {
-      Cow::Owned(format!(
-        "{}{joined}{}",
-        if leading_space { SPACE_MARKER } else { "" },
-        if trailing_space { SPACE_MARKER } else { "" },
-      ))
-    };
+    }
 
-    if !joined.is_empty() {
-      self.buffer.push_str(indent);
+    self.buffer.push('\n');
+  }
 
-      if matches!(parent, "script" | "style") {
-        self.buffer.push_str(&joined);
-      } else {
-        self.buffer.push_str(&Self::escape_text(&joined));
+  fn write_tokens(&mut self, tokens: &[Token], mut depth: usize, raw: bool) {
+    let mut remaining = tokens;
+
+    while let Some((token, tail)) = remaining.split_first() {
+      match token {
+        Token::Close(name) => {
+          depth -= 1;
+          self.buffer.push_str(&"  ".repeat(depth));
+          self.buffer.push_str("</");
+          self.buffer.push_str(name);
+          self.buffer.push_str(">\n");
+          remaining = tail;
+        }
+        Token::Element(element) => {
+          self.write_element(element, depth);
+          remaining = tail;
+        }
+        Token::Open(element) => {
+          self.write_open_tag(element, &"  ".repeat(depth));
+
+          if let Some((Token::Close(name), rest)) = tail.split_first() {
+            self.write_empty_element_end(name);
+            remaining = rest;
+          } else {
+            self.buffer.push_str(">\n");
+            depth += 1;
+            remaining = tail;
+          }
+        }
+        Token::Space | Token::Text(_) => {
+          let length = remaining
+            .iter()
+            .take_while(|token| matches!(token, Token::Space | Token::Text(_)))
+            .count();
+
+          let (run, rest) = remaining.split_at(length);
+
+          self.write_text(run, &"  ".repeat(depth), raw);
+
+          remaining = rest;
+        }
       }
-
-      self.buffer.push('\n');
     }
   }
 }
@@ -657,6 +820,21 @@ mod tests {
   }
 
   #[test]
+  fn inline_boundary_whitespace_is_canonicalized() {
+    #[track_caller]
+    fn case(actual: &str, expected: &str) {
+      assert_html_eq!(actual, expected);
+    }
+
+    case("<p>foo<b> bar</b></p>", "<p>foo <b>bar</b></p>");
+    case("<p><b>foo </b>bar</p>", "<p><b>foo</b> bar</p>");
+    case(
+      "<p>foo <script></script> bar</p>",
+      "<p>foo<script></script> bar</p>",
+    );
+  }
+
+  #[test]
   fn inline_element_spacing_amount_is_ignored() {
     assert_html_eq!(
       "<p>foo \n  <b>bar</b>\n baz</p>",
@@ -682,6 +860,12 @@ mod tests {
   #[test]
   fn leading_trailing_whitespace_inside_block_is_ignored() {
     assert_html_eq!("<div>\n   hello  \n</div>", "<div>hello</div>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn literal_space_markers_are_escaped() {
+    assert_html_eq!("<p>foo\u{2423}<b>bar</b></p>", "<p>foo <b>bar</b></p>");
   }
 
   #[test]
@@ -965,6 +1149,15 @@ mod tests {
   }
 
   #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn unknown_elements_are_inline() {
+    assert_html_eq!(
+      "<p>foo <x-bar>baz</x-bar></p>",
+      "<p>foo<x-bar>baz</x-bar></p>"
+    );
+  }
+
+  #[test]
   fn unusual_whitespace_chars_collapse() {
     assert_html_eq!("<p>A\u{2009}\u{2003}B</p>", "<p>A B</p>");
   }
@@ -978,6 +1171,18 @@ mod tests {
   #[test]
   fn whitespace_around_comments_in_significant_contexts_isnt_invented() {
     assert_html_eq!("<pre>foo<!--x-->bar</pre>", "<pre>foobar</pre>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn whitespace_around_inline_blocks_matters() {
+    assert_html_eq!("<label>foo <input></label>", "<label>foo<input></label>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn whitespace_inside_inline_elements_matters() {
+    assert_html_eq!("<p>foo<b> bar</b></p>", "<p>foo<b>bar</b></p>");
   }
 
   #[test]
