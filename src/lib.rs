@@ -232,11 +232,41 @@ impl Normalizer {
   }
 
   fn fragment_to_document(html: &Html) -> Html {
+    let mut html = html.clone();
+
+    let ids = html
+      .tree
+      .nodes()
+      .filter_map(|node| {
+        let leading_newline = node.prev_sibling().is_none()
+          && node
+            .value()
+            .as_text()
+            .is_some_and(|text| text.starts_with('\n'))
+          && node
+            .parent()
+            .and_then(|parent| parent.value().as_element())
+            .is_some_and(|parent| {
+              matches!(parent.name(), "listing" | "pre" | "textarea")
+            });
+
+        leading_newline.then_some(node.id())
+      })
+      .collect::<Vec<_>>();
+
+    for id in ids {
+      if let Some(mut node) = html.tree.get_mut(id)
+        && let Node::Text(text) = node.value()
+      {
+        text.text = format!("\n{}", &*text.text).as_str().into();
+      }
+    }
+
     let mut buffer = Vec::new();
 
     html5ever::serialize(
       &mut buffer,
-      html,
+      &html,
       SerializeOpts {
         scripting_enabled: true,
         traversal_scope: TraversalScope::IncludeNode,
@@ -868,6 +898,18 @@ mod tests {
       "<a href=\"/?a=1&amp;b=2\">x</a>",
       "<a href='/?a=1&b=2'>x</a>"
     );
+  }
+
+  #[test]
+  fn fragment_leading_newlines_are_preserved() {
+    #[track_caller]
+    fn case(html: &str) {
+      assert_html_eq!(Html::parse_fragment(html), html);
+    }
+
+    case("<listing>\n\nfoo</listing>");
+    case("<pre>\n\nfoo</pre>");
+    case("<textarea>\n\nfoo</textarea>");
   }
 
   #[test]
