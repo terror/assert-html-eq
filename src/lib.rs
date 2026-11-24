@@ -383,33 +383,33 @@ impl<'a> Normalizer<'a> {
 
 #[doc(hidden)]
 pub mod __private {
-  use {super::Normalizer, scraper::Html};
+  use {super::Normalizer, scraper::Html, std::borrow::Cow};
 
-  pub trait IntoHtml {
-    fn into_html(self) -> Html;
+  pub trait IntoHtml<'a> {
+    fn into_html(self) -> Cow<'a, Html>;
   }
 
-  impl IntoHtml for Html {
-    fn into_html(self) -> Html {
-      self
+  impl IntoHtml<'_> for Html {
+    fn into_html(self) -> Cow<'static, Html> {
+      Cow::Owned(self)
     }
   }
 
-  impl IntoHtml for &Html {
-    fn into_html(self) -> Html {
-      self.clone()
+  impl<'a> IntoHtml<'a> for &'a Html {
+    fn into_html(self) -> Cow<'a, Html> {
+      Cow::Borrowed(self)
     }
   }
 
-  impl IntoHtml for &str {
-    fn into_html(self) -> Html {
-      Html::parse_document(self)
+  impl IntoHtml<'_> for &str {
+    fn into_html(self) -> Cow<'static, Html> {
+      Cow::Owned(Html::parse_document(self))
     }
   }
 
-  impl IntoHtml for String {
-    fn into_html(self) -> Html {
-      Html::parse_document(&self)
+  impl IntoHtml<'_> for String {
+    fn into_html(self) -> Cow<'static, Html> {
+      Cow::Owned(Html::parse_document(&self))
     }
   }
 
@@ -435,7 +435,7 @@ pub mod __private {
     }
   }
 
-  pub fn into_html<T: IntoHtml>(input: T) -> Html {
+  pub fn into_html<'a, T: IntoHtml<'a>>(input: T) -> Cow<'a, Html> {
     input.into_html()
   }
 }
@@ -443,6 +443,11 @@ pub mod __private {
 #[cfg(test)]
 mod tests {
   use {super::*, indoc::indoc, scraper::Html};
+
+  #[test]
+  fn accepts_html_references() {
+    assert_html_eq!(&Html::parse_document("<p>foo</p>"), "<p>foo</p>");
+  }
 
   #[test]
   fn accepts_html_values() {
