@@ -5,10 +5,10 @@ export EDITOR := 'nvim'
 alias f := fmt
 alias t := test
 
-ci: fmt-check clippy test
-
 default:
   just --list
+
+ci: fmt-check clippy test
 
 clippy:
   cargo clippy
