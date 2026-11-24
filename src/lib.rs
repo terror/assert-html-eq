@@ -206,10 +206,12 @@ impl<'a> Normalizer<'a> {
       })
       .collect::<Vec<_>>();
 
+    let significant = self.significant();
+
     let has_visible_children =
       children.iter().any(|child| match child.value() {
         Node::Text(text) => {
-          !Self::normalize_text(text, self.significant()).is_empty()
+          significant || text.chars().any(|c| !c.is_whitespace())
         }
         Node::Element(_)
         | Node::Doctype(_)
