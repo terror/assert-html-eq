@@ -15,6 +15,7 @@ dependencies = [
 name = "assert-html-eq"
 version = "0.1.0"
 dependencies = [
+ "html5ever",
  "indoc",
  "pretty_assertions",
  "scraper",

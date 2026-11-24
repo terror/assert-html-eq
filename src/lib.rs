@@ -1,4 +1,5 @@
 use {
+  html5ever::serialize::{SerializeOpts, TraversalScope},
   scraper::{ElementRef, Html, Node},
   std::borrow::Cow,
   unicode_normalization::{UnicodeNormalization, is_nfc},
@@ -228,6 +229,25 @@ impl Normalizer {
     }
 
     tokens.append(boundary);
+  }
+
+  fn fragment_to_document(html: &Html) -> Html {
+    let mut buffer = Vec::new();
+
+    html5ever::serialize(
+      &mut buffer,
+      html,
+      SerializeOpts {
+        scripting_enabled: true,
+        traversal_scope: TraversalScope::IncludeNode,
+        create_missing_parent: false,
+      },
+    )
+    .expect("serializing to a vector cannot fail");
+
+    Html::parse_document(
+      &String::from_utf8(buffer).expect("serialized HTML must be valid UTF-8"),
+    )
   }
 
   fn inline_tokens<'a>(element: &ElementRef<'a>) -> Vec<Token<'a>> {
@@ -627,7 +647,7 @@ pub mod __private {
     let html = input.into_html();
 
     if html.tree.root().value().is_fragment() {
-      Cow::Owned(Html::parse_document(&html.html()))
+      Cow::Owned(Normalizer::fragment_to_document(&html))
     } else {
       html
     }
@@ -847,6 +867,14 @@ mod tests {
     assert_html_eq!(
       "<a href=\"/?a=1&amp;b=2\">x</a>",
       "<a href='/?a=1&b=2'>x</a>"
+    );
+  }
+
+  #[test]
+  fn fragment_noscript_content_is_preserved() {
+    assert_html_eq!(
+      Html::parse_fragment("<noscript><p>foo</p></noscript>"),
+      "<noscript><p>foo</p></noscript>"
     );
   }
 
