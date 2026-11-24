@@ -427,7 +427,7 @@ pub mod __private {
       return;
     }
 
-    let diff = pretty_assertions::StrComparison::new(&expected, &actual);
+    let diff = pretty_assertions::StrComparison::new(&actual, &expected);
 
     match custom {
       Some(message) => panic!("{message}\nassert_html_eq! failed:\n{diff}"),
@@ -532,6 +532,14 @@ mod tests {
         </span>
       </div>",
     );
+  }
+
+  #[test]
+  #[should_panic(
+    expected = "\u{1b}[31m<      \u{1b}[0m\u{1b}[1;48;5;52;31mfoo"
+  )]
+  fn diff_shows_actual_as_left() {
+    assert_html_eq!("<p>foo</p>", "<p>bar</p>");
   }
 
   #[test]
