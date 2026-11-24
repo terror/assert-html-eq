@@ -30,33 +30,39 @@ macro_rules! assert_html_eq {
   }};
 }
 
-const BOOLEAN_ATTRIBUTES: &[&str] = &[
-  "allowfullscreen",
-  "async",
-  "autofocus",
-  "autoplay",
-  "checked",
-  "controls",
-  "default",
-  "defer",
-  "disabled",
-  "formnovalidate",
-  "hidden",
-  "inert",
-  "ismap",
-  "itemscope",
-  "loop",
-  "multiple",
-  "muted",
-  "nomodule",
-  "novalidate",
-  "open",
-  "playsinline",
-  "readonly",
-  "required",
-  "reversed",
-  "selected",
-  "truespeed",
+const BOOLEAN_ATTRIBUTES: &[(&str, Option<&[&str]>)] = &[
+  ("allowfullscreen", Some(&["iframe"])),
+  ("async", Some(&["script"])),
+  ("autofocus", None),
+  ("autoplay", Some(&["audio", "video"])),
+  ("checked", Some(&["input"])),
+  ("controls", Some(&["audio", "video"])),
+  ("default", Some(&["track"])),
+  ("defer", Some(&["script"])),
+  (
+    "disabled",
+    Some(&[
+      "button", "fieldset", "input", "link", "optgroup", "option", "select",
+      "textarea",
+    ]),
+  ),
+  ("formnovalidate", Some(&["button", "input"])),
+  ("hidden", None),
+  ("inert", None),
+  ("ismap", Some(&["img"])),
+  ("itemscope", None),
+  ("loop", Some(&["audio", "video"])),
+  ("multiple", Some(&["input", "select"])),
+  ("muted", Some(&["audio", "video"])),
+  ("nomodule", Some(&["script"])),
+  ("novalidate", Some(&["form"])),
+  ("open", Some(&["details", "dialog"])),
+  ("playsinline", Some(&["video"])),
+  ("readonly", Some(&["input", "textarea"])),
+  ("required", Some(&["input", "select", "textarea"])),
+  ("reversed", Some(&["ol"])),
+  ("selected", Some(&["option"])),
+  ("truespeed", Some(&["marquee"])),
 ];
 
 const DISPLAY_BLOCK_ELEMENTS: &[&str] = &[
@@ -285,6 +291,8 @@ impl Normalizer {
   }
 
   fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
+    let element_name = element.value().name();
+
     let mut attrs = element
       .value()
       .attrs
@@ -310,7 +318,10 @@ impl Normalizer {
             name,
             value: Some(Cow::Borrowed("until-found")),
           }
-        } else if BOOLEAN_ATTRIBUTES.contains(&&*name) {
+        } else if BOOLEAN_ATTRIBUTES.iter().any(|(attribute, elements)| {
+          *attribute == name
+            && elements.is_none_or(|elements| elements.contains(&element_name))
+        }) {
           Attribute { name, value: None }
         } else {
           Attribute {
@@ -685,6 +696,12 @@ mod tests {
   fn boolean_attribute_forms_are_equivalent() {
     assert_html_eq!("<input disabled>", "<input disabled=\"\">");
     assert_html_eq!("<input disabled>", "<input disabled=disabled>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn boolean_attributes_are_element_specific() {
+    assert_html_eq!("<x-foo open=\"bar\"></x-foo>", "<x-foo open></x-foo>");
   }
 
   #[test]
