@@ -128,6 +128,12 @@ impl<'a> Normalizer<'a> {
             name,
             value: Some(Cow::Owned(Self::normalize_token_set(name, value))),
           }
+        } else if name == "hidden" && value.eq_ignore_ascii_case("until-found")
+        {
+          Attribute {
+            name,
+            value: Some(Cow::Borrowed("until-found")),
+          }
         } else if BOOLEAN_ATTRIBUTES.contains(&name) {
           Attribute { name, value: None }
         } else {
@@ -590,6 +596,20 @@ mod tests {
       "<a href=\"/?a=1&amp;b=2\">x</a>",
       "<a href='/?a=1&b=2'>x</a>"
     );
+  }
+
+  #[test]
+  fn hidden_until_found_is_case_insensitive() {
+    assert_html_eq!(
+      "<div hidden=\"UNTIL-FOUND\"></div>",
+      "<div hidden=\"until-found\"></div>"
+    );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn hidden_until_found_is_not_boolean() {
+    assert_html_eq!("<div hidden=\"until-found\"></div>", "<div hidden></div>");
   }
 
   #[test]
