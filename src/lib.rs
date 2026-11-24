@@ -68,8 +68,16 @@ const VOID_ELEMENTS: &[&str] = &[
   "param", "source", "track", "wbr",
 ];
 
-const WHITESPACE_SIGNIFICANT_ELEMENTS: &[&str] =
-  &["code", "pre", "script", "style", "textarea"];
+const WHITESPACE_SIGNIFICANT_ELEMENTS: &[&str] = &[
+  "code",
+  "listing",
+  "plaintext",
+  "pre",
+  "script",
+  "style",
+  "textarea",
+  "xmp",
+];
 
 struct Attribute<'a> {
   name: &'a str,
@@ -835,6 +843,12 @@ mod tests {
       "<textarea>line  with  spaces</textarea>",
       "<textarea>line with spaces</textarea>"
     );
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn preserves_xmp_whitespace() {
+    assert_html_eq!("<xmp>foo  bar</xmp>", "<xmp>foo bar</xmp>");
   }
 
   #[test]
