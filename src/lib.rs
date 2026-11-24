@@ -72,7 +72,7 @@ const WHITESPACE_SIGNIFICANT_ELEMENTS: &[&str] =
   &["code", "pre", "script", "style", "textarea"];
 
 struct Attribute<'a> {
-  name: &'a str,
+  name: Cow<'a, str>,
   value: Option<Cow<'a, str>>,
 }
 
@@ -123,12 +123,22 @@ impl<'a> Normalizer<'a> {
   fn normalize_attributes(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
     let mut attrs = element
       .value()
-      .attrs()
+      .attrs
+      .iter()
       .map(|(name, value)| {
-        if TOKEN_SET_ATTRIBUTES.contains(&name) {
+        let (name, value) = match &name.prefix {
+          Some(prefix) => {
+            (Cow::Owned(format!("{prefix}:{}", name.local)), &**value)
+          }
+          None => (Cow::Borrowed(&*name.local), &**value),
+        };
+
+        if TOKEN_SET_ATTRIBUTES.contains(&&*name) {
+          let value = Self::normalize_token_set(&name, value);
+
           Attribute {
             name,
-            value: Some(Cow::Owned(Self::normalize_token_set(name, value))),
+            value: Some(Cow::Owned(value)),
           }
         } else if name == "hidden" && value.eq_ignore_ascii_case("until-found")
         {
@@ -136,7 +146,7 @@ impl<'a> Normalizer<'a> {
             name,
             value: Some(Cow::Borrowed("until-found")),
           }
-        } else if BOOLEAN_ATTRIBUTES.contains(&name) {
+        } else if BOOLEAN_ATTRIBUTES.contains(&&*name) {
           Attribute { name, value: None }
         } else {
           Attribute {
@@ -147,7 +157,7 @@ impl<'a> Normalizer<'a> {
       })
       .collect::<Vec<_>>();
 
-    attrs.sort_by(|a, b| a.name.cmp(b.name));
+    attrs.sort_by(|a, b| a.name.cmp(&b.name));
     attrs
   }
 
@@ -306,7 +316,7 @@ impl<'a> Normalizer<'a> {
 
     for Attribute { name: key, value } in Self::normalize_attributes(element) {
       self.buffer.push(' ');
-      self.buffer.push_str(key);
+      self.buffer.push_str(&key);
 
       if let Some(value) = value {
         self.buffer.push_str("=\"");
@@ -655,6 +665,15 @@ mod tests {
   #[test]
   fn mixed_text_runs_around_inline_elements() {
     assert_html_eq!("<p> A <em>  B  </em>  C </p>", "<p>A <em>B</em> C</p>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn namespace_prefixes_are_preserved() {
+    assert_html_eq!(
+      "<svg><a xlink:href=\"foo\"></a></svg>",
+      "<svg><a href=\"foo\"></a></svg>"
+    );
   }
 
   #[test]
