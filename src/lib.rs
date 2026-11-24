@@ -171,6 +171,11 @@ impl Normalizer {
       })
       .collect::<Vec<_>>();
 
+    attrs.retain(|attribute| {
+      !matches!(&*attribute.name, "class" | "part" | "rel")
+        || attribute.value.as_deref() != Some("")
+    });
+
     attrs.sort_by(|a, b| a.name.cmp(&b.name));
     attrs
   }
@@ -614,6 +619,17 @@ mod tests {
     );
 
     assert_html_eq!("<div class=\"a  a   b\">", "<div class=\"a b\">");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn empty_sandbox_is_preserved() {
+    assert_html_eq!("<iframe sandbox></iframe>", "<iframe></iframe>");
+  }
+
+  #[test]
+  fn empty_token_sets_are_ignored() {
+    assert_html_eq!("<div class=\" \"></div>", "<div></div>");
   }
 
   #[test]
