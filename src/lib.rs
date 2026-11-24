@@ -9,18 +9,24 @@ pub use scraper;
 #[macro_export]
 macro_rules! assert_html_eq {
   ($actual:expr, $expected:expr $(,)?) => {{
-    $crate::__private::assert_html_eq(
+    if let Some(diff) = $crate::__private::diff(
       &$crate::__private::into_html($actual),
       &$crate::__private::into_html($expected),
-      None
-    );
+    ) {
+      ::core::panic!("assert_html_eq! failed:\n{}", diff);
+    }
   }};
   ($actual:expr, $expected:expr, $($arg:tt)+) => {{
-    $crate::__private::assert_html_eq(
+    if let Some(diff) = $crate::__private::diff(
       &$crate::__private::into_html($actual),
       &$crate::__private::into_html($expected),
-      Some(format!($($arg)+)),
-    );
+    ) {
+      ::core::panic!(
+        "{}\nassert_html_eq! failed:\n{}",
+        ::core::format_args!($($arg)+),
+        diff,
+      );
+    }
   }};
 }
 
@@ -394,26 +400,16 @@ pub mod __private {
     }
   }
 
-  pub fn assert_html_eq(
-    actual: &Html,
-    expected: &Html,
-    custom: Option<String>,
-  ) {
+  #[must_use]
+  pub fn diff(actual: &Html, expected: &Html) -> Option<String> {
     let (actual, expected) = (
       Normalizer::normalize(actual),
       Normalizer::normalize(expected),
     );
 
-    if actual == expected {
-      return;
-    }
-
-    let diff = pretty_assertions::StrComparison::new(&actual, &expected);
-
-    match custom {
-      Some(message) => panic!("{message}\nassert_html_eq! failed:\n{diff}"),
-      None => panic!("assert_html_eq! failed:\n{diff}"),
-    }
+    (actual != expected).then(|| {
+      pretty_assertions::StrComparison::new(&actual, &expected).to_string()
+    })
   }
 
   pub fn into_html<'a, T: IntoHtml<'a>>(input: T) -> Cow<'a, Html> {
@@ -423,7 +419,7 @@ pub mod __private {
 
 #[cfg(test)]
 mod tests {
-  use {super::*, indoc::indoc, scraper::Html};
+  use {super::*, indoc::indoc, scraper::Html, std::cell::Cell};
 
   #[test]
   fn accepts_html_references() {
@@ -518,6 +514,24 @@ mod tests {
         </span>
       </div>",
     );
+  }
+
+  #[test]
+  #[should_panic(expected = "foo bar\nassert_html_eq! failed:\n")]
+  fn custom_message_is_included() {
+    assert_html_eq!("<p>baz</p>", "<p>qux</p>", "foo {}", "bar");
+  }
+
+  #[test]
+  fn custom_message_is_lazy() {
+    let evaluated = Cell::new(false);
+
+    assert_html_eq!("<p>foo</p>", "<p>foo</p>", "{}", {
+      evaluated.set(true);
+      "bar"
+    });
+
+    assert!(!evaluated.get());
   }
 
   #[test]
