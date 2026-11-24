@@ -4,6 +4,8 @@ use {
   unicode_normalization::{UnicodeNormalization, is_nfc},
 };
 
+pub use scraper;
+
 #[macro_export]
 macro_rules! assert_html_eq {
   ($actual:expr, $expected:expr $(,)?) => {{
