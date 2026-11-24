@@ -420,7 +420,9 @@ impl Normalizer {
 
     self.significant_depth += usize::from(significant);
 
-    self.write_element_contents(element, depth);
+    stacker::maybe_grow(64 * 1024, 1024 * 1024, || {
+      self.write_element_contents(element, depth);
+    });
 
     self.significant_depth -= usize::from(significant);
   }
@@ -724,6 +726,12 @@ mod tests {
     });
 
     assert!(!evaluated.get());
+  }
+
+  #[test]
+  fn deeply_nested_elements_are_supported() {
+    let html = "<div>".repeat(3000);
+    assert_html_eq!(&html, &html);
   }
 
   #[test]
