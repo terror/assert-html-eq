@@ -365,7 +365,12 @@ impl<'a> Normalizer<'a> {
       }
 
       self.buffer.push_str(indent);
-      self.buffer.push_str(&Self::escape_text(&joined));
+
+      if matches!(self.stack.last(), Some(&("script" | "style"))) {
+        self.buffer.push_str(&joined);
+      } else {
+        self.buffer.push_str(&Self::escape_text(&joined));
+      }
     }
   }
 }
@@ -855,6 +860,24 @@ mod tests {
   #[should_panic(expected = "assert_html_eq! failed")]
   fn preserves_xmp_whitespace() {
     assert_html_eq!("<xmp>foo  bar</xmp>", "<xmp>foo bar</xmp>");
+  }
+
+  #[test]
+  fn raw_text_is_not_escaped() {
+    assert_eq!(
+      Normalizer::normalize(&Html::parse_document(
+        "<script>foo < bar</script>"
+      )),
+      indoc! {"
+        <html>
+          <head>
+            <script>
+              foo < bar
+            </script>
+          </head>
+          <body></body>
+        </html>"},
+    );
   }
 
   #[test]
