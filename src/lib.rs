@@ -1,6 +1,6 @@
 use {
   scraper::{ElementRef, Html, Node},
-  std::{borrow::Cow, fmt::Write},
+  std::borrow::Cow,
   unicode_normalization::{UnicodeNormalization, is_nfc},
 };
 
@@ -198,12 +198,7 @@ impl<'a> Normalizer<'a> {
 
     let children = element
       .children()
-      .filter(|child| {
-        !matches!(
-          child.value(),
-          Node::Comment(_) | Node::Document | Node::Fragment
-        )
-      })
+      .filter(|child| matches!(child.value(), Node::Element(_) | Node::Text(_)))
       .collect::<Vec<_>>();
 
     let has_visible_children =
@@ -211,10 +206,7 @@ impl<'a> Normalizer<'a> {
         Node::Text(text) => {
           !Self::normalize_text(text, self.significant()).is_empty()
         }
-        Node::Element(_)
-        | Node::Doctype(_)
-        | Node::ProcessingInstruction(_) => true,
-        _ => false,
+        _ => true,
       });
 
     if !has_visible_children {
@@ -229,65 +221,44 @@ impl<'a> Normalizer<'a> {
     let mut remaining = children.as_slice();
 
     while let Some((child, tail)) = remaining.split_first() {
-      match child.value() {
-        Node::Element(_) => {
-          if !self.buffer.ends_with('\n') {
-            self.buffer.push('\n');
-          }
-
-          self.write_element(
-            &ElementRef::wrap(*child).expect("child must be an element"),
-            depth + 1,
-          );
-
-          remaining = tail;
+      if let Some(element) = ElementRef::wrap(*child) {
+        if !self.buffer.ends_with('\n') {
+          self.buffer.push('\n');
         }
-        Node::Text(_) => {
-          let text_run_len = 1
-            + tail
-              .iter()
-              .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
-              .count();
 
-          let start = children.len() - remaining.len();
+        self.write_element(&element, depth + 1);
 
-          let (text_run, rest) = remaining.split_at(text_run_len);
-
-          let raw = text_run
+        remaining = tail;
+      } else {
+        let text_run_len = 1
+          + tail
             .iter()
-            .filter_map(|n| match n.value() {
-              Node::Text(t) => Some(&**t),
-              _ => None,
-            })
-            .collect::<String>();
+            .take_while(|sibling| matches!(sibling.value(), Node::Text(_)))
+            .count();
 
-          let previous = start.checked_sub(1).and_then(|i| children.get(i));
-          let next = children.get(start + text_run_len);
+        let start = children.len() - remaining.len();
 
-          self.write_text(
-            &raw,
-            &child_indent,
-            previous.is_some_and(|node| Self::is_inline(node.value())),
-            next.is_some_and(|node| Self::is_inline(node.value())),
-          );
+        let (text_run, rest) = remaining.split_at(text_run_len);
 
-          remaining = rest;
-        }
-        Node::Doctype(doctype) => {
-          self.buffer.push('\n');
-          self.buffer.push_str(&child_indent);
-          let _ = write!(self.buffer, "{doctype:?}");
-          remaining = tail;
-        }
-        Node::ProcessingInstruction(pi) => {
-          self.buffer.push('\n');
-          self.buffer.push_str(&child_indent);
-          let _ = write!(self.buffer, "{pi:?}");
-          remaining = tail;
-        }
-        Node::Document | Node::Fragment | Node::Comment(_) => {
-          remaining = tail;
-        }
+        let raw = text_run
+          .iter()
+          .filter_map(|n| match n.value() {
+            Node::Text(t) => Some(&**t),
+            _ => None,
+          })
+          .collect::<String>();
+
+        let previous = start.checked_sub(1).and_then(|i| children.get(i));
+        let next = children.get(start + text_run_len);
+
+        self.write_text(
+          &raw,
+          &child_indent,
+          previous.is_some_and(|node| Self::is_inline(node.value())),
+          next.is_some_and(|node| Self::is_inline(node.value())),
+        );
+
+        remaining = rest;
       }
     }
 
