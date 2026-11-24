@@ -406,6 +406,12 @@ pub mod __private {
     }
   }
 
+  impl IntoHtml<'_> for &String {
+    fn into_html(self) -> Cow<'static, Html> {
+      Cow::Owned(Html::parse_document(self))
+    }
+  }
+
   impl IntoHtml<'_> for String {
     fn into_html(self) -> Cow<'static, Html> {
       Cow::Owned(Html::parse_document(&self))
@@ -454,6 +460,11 @@ mod tests {
       Html::parse_document("<p>Text</p>"),
       Html::parse_document("<p>Text</p>")
     );
+  }
+
+  #[test]
+  fn accepts_string_references() {
+    assert_html_eq!(&"<p>foo</p>".to_string(), "<p>foo</p>");
   }
 
   #[test]
