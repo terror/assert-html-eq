@@ -155,7 +155,7 @@ impl<'a> Normalizer<'a> {
     };
 
     let collapsed = unicode
-      .split(|c: char| c.is_whitespace() || c == '\u{00A0}')
+      .split(char::is_whitespace)
       .filter(|s| !s.is_empty())
       .collect::<Vec<_>>()
       .join(" ");
