@@ -97,7 +97,13 @@ struct Normalizer {
 
 impl Normalizer {
   fn escape_attribute(input: &str) -> String {
-    Self::escape_text(input).replace('"', "&quot;")
+    let escaped = Self::escape_text(input);
+
+    if escaped.contains('"') {
+      escaped.replace('"', "&quot;")
+    } else {
+      escaped
+    }
   }
 
   fn escape_text(input: &str) -> String {
