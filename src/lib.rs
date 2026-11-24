@@ -257,7 +257,7 @@ impl Normalizer {
       return;
     }
 
-    self.buffer.push('>');
+    self.buffer.push_str(">\n");
 
     let child_indent = "  ".repeat(depth + 1);
 
@@ -265,10 +265,6 @@ impl Normalizer {
 
     while let Some((child, tail)) = remaining.split_first() {
       if let Some(element) = ElementRef::wrap(*child) {
-        if !self.buffer.ends_with('\n') {
-          self.buffer.push('\n');
-        }
-
         self.write_element(&element, depth + 1);
 
         remaining = tail;
@@ -304,10 +300,6 @@ impl Normalizer {
 
         remaining = rest;
       }
-    }
-
-    if !self.buffer.ends_with('\n') {
-      self.buffer.push('\n');
     }
 
     self.buffer.push_str(&indent);
@@ -381,10 +373,6 @@ impl Normalizer {
     };
 
     if !joined.is_empty() {
-      if !self.buffer.ends_with('\n') {
-        self.buffer.push('\n');
-      }
-
       self.buffer.push_str(indent);
 
       if matches!(parent, "script" | "style") {
@@ -392,6 +380,8 @@ impl Normalizer {
       } else {
         self.buffer.push_str(&Self::escape_text(&joined));
       }
+
+      self.buffer.push('\n');
     }
   }
 }
@@ -932,6 +922,18 @@ mod tests {
   #[test]
   fn self_closing_non_void_normalizes() {
     assert_html_eq!("<div/>", "<div></div>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn significant_newline_before_element_is_preserved() {
+    assert_html_eq!("<pre>foo\n<b>bar</b></pre>", "<pre>foo<b>bar</b></pre>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn significant_trailing_newline_is_preserved() {
+    assert_html_eq!("<pre>foo\n</pre>", "<pre>foo</pre>");
   }
 
   #[test]
