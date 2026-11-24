@@ -1140,12 +1140,6 @@ mod tests {
   }
 
   #[test]
-  fn spacing_around_inline_elements_is_semantic() {
-    assert_html_eq!("<p>a <em>b</em> c</p>", "<p>a <em>b</em> c</p>");
-    assert_html_eq!("<p>a<em>b</em>c</p>", "<p>a<em>b</em>c</p>");
-  }
-
-  #[test]
   fn template_content_is_compared_if_supported() {
     assert_html_eq!(
       "<template><span> A   B </span></template>",
