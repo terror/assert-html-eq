@@ -297,6 +297,7 @@ impl Normalizer {
         self.write_text(
           &raw,
           &child_indent,
+          name,
           previous.is_some_and(|node| Self::is_inline(node.value())),
           next.is_some_and(|node| Self::is_inline(node.value())),
         );
@@ -351,6 +352,7 @@ impl Normalizer {
     &mut self,
     raw: &str,
     indent: &str,
+    parent: &str,
     after_inline: bool,
     before_inline: bool,
   ) {
@@ -385,7 +387,7 @@ impl Normalizer {
 
       self.buffer.push_str(indent);
 
-      if matches!(self.stack.last(), Some(&("script" | "style"))) {
+      if matches!(parent, "script" | "style") {
         self.buffer.push_str(&joined);
       } else {
         self.buffer.push_str(&Self::escape_text(&joined));
