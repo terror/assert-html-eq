@@ -90,12 +90,12 @@ struct Attribute<'a> {
   value: Option<Cow<'a, str>>,
 }
 
-struct Normalizer<'a> {
+struct Normalizer {
   buffer: String,
-  stack: Vec<&'a str>,
+  significant_depth: usize,
 }
 
-impl<'a> Normalizer<'a> {
+impl Normalizer {
   fn escape_attribute(input: &str) -> String {
     Self::escape_text(input).replace('"', "&quot;")
   }
@@ -119,10 +119,10 @@ impl<'a> Normalizer<'a> {
     matches!(node, Node::Element(element) if INLINE_ELEMENTS.contains(&element.name()))
   }
 
-  fn normalize(html: &'a Html) -> String {
+  fn normalize(html: &Html) -> String {
     let mut normalizer = Normalizer {
       buffer: String::new(),
-      stack: Vec::new(),
+      significant_depth: 0,
     };
 
     normalizer.write_element(&html.root_element(), 0);
@@ -134,7 +134,7 @@ impl<'a> Normalizer<'a> {
     normalizer.buffer
   }
 
-  fn normalize_attributes(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
+  fn normalize_attributes<'a>(element: &ElementRef<'a>) -> Vec<Attribute<'a>> {
     let mut attrs = element
       .value()
       .attrs
@@ -215,13 +215,22 @@ impl<'a> Normalizer<'a> {
   }
 
   fn significant(&self) -> bool {
-    self
-      .stack
-      .iter()
-      .any(|tag| WHITESPACE_SIGNIFICANT_ELEMENTS.contains(tag))
+    self.significant_depth > 0
   }
 
-  fn write_element(&mut self, element: &ElementRef<'a>, depth: usize) {
+  fn write_element(&mut self, element: &ElementRef, depth: usize) {
+    let name = element.value().name();
+
+    let significant = WHITESPACE_SIGNIFICANT_ELEMENTS.contains(&name);
+
+    self.significant_depth += usize::from(significant);
+
+    self.write_element_contents(element, depth);
+
+    self.significant_depth -= usize::from(significant);
+  }
+
+  fn write_element_contents(&mut self, element: &ElementRef, depth: usize) {
     let indent = "  ".repeat(depth);
 
     self.write_open_tag(element, &indent);
@@ -305,8 +314,6 @@ impl<'a> Normalizer<'a> {
     self.buffer.push_str(name);
     self.buffer.push('>');
     self.buffer.push('\n');
-
-    self.stack.pop();
   }
 
   fn write_empty_element_end(&mut self, name: &str) {
@@ -317,11 +324,9 @@ impl<'a> Normalizer<'a> {
       self.buffer.push_str(name);
       self.buffer.push_str(">\n");
     }
-
-    self.stack.pop();
   }
 
-  fn write_open_tag(&mut self, element: &ElementRef<'a>, indent: &str) {
+  fn write_open_tag(&mut self, element: &ElementRef, indent: &str) {
     let name = element.value().name();
 
     self.buffer.push_str(indent);
@@ -340,8 +345,6 @@ impl<'a> Normalizer<'a> {
         self.buffer.push('"');
       }
     }
-
-    self.stack.push(name);
   }
 
   fn write_text(
