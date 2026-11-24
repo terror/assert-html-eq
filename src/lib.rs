@@ -164,7 +164,7 @@ impl<'a> Normalizer<'a> {
   }
 
   fn normalize_token_set(name: &str, value: &str) -> String {
-    let lowercase = matches!(name, "part" | "rel" | "sandbox");
+    let lowercase = matches!(name, "rel" | "sandbox");
 
     let mut tokens = value
       .split_ascii_whitespace()
@@ -782,6 +782,12 @@ mod tests {
   #[test]
   fn normalizes_unicode_text() {
     assert_html_eq!("<p>Café</p>", "<p>Cafe\u{0301}</p>");
+  }
+
+  #[test]
+  #[should_panic(expected = "assert_html_eq! failed")]
+  fn part_tokens_are_case_sensitive() {
+    assert_html_eq!("<div part=\"Foo\"></div>", "<div part=\"foo\"></div>");
   }
 
   #[test]
