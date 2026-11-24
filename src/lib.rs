@@ -437,13 +437,24 @@ pub mod __private {
   }
 
   pub fn into_html<'a, T: IntoHtml<'a>>(input: T) -> Cow<'a, Html> {
-    input.into_html()
+    let html = input.into_html();
+
+    if html.tree.root().value().is_fragment() {
+      Cow::Owned(Html::parse_document(&html.html()))
+    } else {
+      html
+    }
   }
 }
 
 #[cfg(test)]
 mod tests {
   use {super::*, indoc::indoc, scraper::Html, std::cell::Cell};
+
+  #[test]
+  fn accepts_html_fragments() {
+    assert_html_eq!(Html::parse_fragment("<p>foo</p>"), "<p>foo</p>");
+  }
 
   #[test]
   fn accepts_html_references() {
